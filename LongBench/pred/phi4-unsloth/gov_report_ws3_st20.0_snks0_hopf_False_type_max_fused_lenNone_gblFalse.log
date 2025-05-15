@@ -1,0 +1,400 @@
+2025-01-12 12:22:25,039 - INFO - ........Input size: 10698 KV Cache size: {'key': 11172, 'value': 11172, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:22:46,351 - INFO - ........Input size: 16141 KV Cache size: {'key': 16481, 'value': 16481, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:23:04,669 - INFO - ........Input size: 9628 KV Cache size: {'key': 9966, 'value': 9966, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:23:14,791 - INFO - ........Input size: 8655 KV Cache size: {'key': 8856, 'value': 8856, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:23:39,166 - INFO - ........Input size: 12266 KV Cache size: {'key': 12711, 'value': 12711, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:24:00,738 - INFO - ........Input size: 7777 KV Cache size: {'key': 8185, 'value': 8185, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:24:23,291 - INFO - ........Input size: 4171 KV Cache size: {'key': 4635, 'value': 4635, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:24:50,054 - INFO - ........Input size: 15388 KV Cache size: {'key': 15819, 'value': 15819, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:25:09,961 - INFO - ........Input size: 3932 KV Cache size: {'key': 4336, 'value': 4336, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:25:33,601 - INFO - ........Input size: 14649 KV Cache size: {'key': 15052, 'value': 15052, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:25:48,898 - INFO - ........Input size: 18663 KV Cache size: {'key': 18866, 'value': 18866, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:26:08,734 - INFO - ........Input size: 10333 KV Cache size: {'key': 10715, 'value': 10715, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:26:26,863 - INFO - ........Input size: 10811 KV Cache size: {'key': 11179, 'value': 11179, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:26:52,887 - INFO - ........Input size: 8673 KV Cache size: {'key': 9184, 'value': 9184, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:27:22,315 - INFO - ........Input size: 18608 KV Cache size: {'key': 19049, 'value': 19049, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:27:43,106 - INFO - ........Input size: 7556 KV Cache size: {'key': 7973, 'value': 7973, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:27:58,362 - INFO - ........Input size: 5260 KV Cache size: {'key': 5558, 'value': 5558, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:28:11,189 - INFO - ........Input size: 10478 KV Cache size: {'key': 10730, 'value': 10730, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:28:25,031 - INFO - ........Input size: 6576 KV Cache size: {'key': 6850, 'value': 6850, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:28:44,611 - INFO - ........Input size: 4171 KV Cache size: {'key': 4569, 'value': 4569, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:29:08,699 - INFO - ........Input size: 7737 KV Cache size: {'key': 8229, 'value': 8229, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:29:20,031 - INFO - ........Input size: 15458 KV Cache size: {'key': 15644, 'value': 15644, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:29:45,689 - INFO - ........Input size: 11387 KV Cache size: {'key': 11898, 'value': 11898, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:30:12,784 - INFO - ........Input size: 16854 KV Cache size: {'key': 17260, 'value': 17260, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:30:35,202 - INFO - ........Input size: 12674 KV Cache size: {'key': 13091, 'value': 13091, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:30:47,938 - INFO - ........Input size: 13213 KV Cache size: {'key': 13432, 'value': 13432, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:31:05,282 - INFO - ........Input size: 7834 KV Cache size: {'key': 8180, 'value': 8180, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:31:22,547 - INFO - ........Input size: 11551 KV Cache size: {'key': 11869, 'value': 11869, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:31:43,445 - INFO - ........Input size: 10214 KV Cache size: {'key': 10641, 'value': 10641, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:31:55,862 - INFO - ........Input size: 20513 KV Cache size: {'key': 20669, 'value': 20669, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:32:19,164 - INFO - ........Input size: 2656 KV Cache size: {'key': 3113, 'value': 3113, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:32:39,912 - INFO - ........Input size: 8750 KV Cache size: {'key': 9140, 'value': 9140, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:33:05,707 - INFO - ........Input size: 4853 KV Cache size: {'key': 5364, 'value': 5364, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:33:29,891 - INFO - ........Input size: 9023 KV Cache size: {'key': 9486, 'value': 9486, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:33:46,313 - INFO - ........Input size: 6103 KV Cache size: {'key': 6428, 'value': 6428, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:34:07,680 - INFO - ........Input size: 2053 KV Cache size: {'key': 2466, 'value': 2466, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:34:25,423 - INFO - ........Input size: 15283 KV Cache size: {'key': 15562, 'value': 15562, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:34:50,536 - INFO - ........Input size: 3187 KV Cache size: {'key': 3671, 'value': 3671, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:35:15,387 - INFO - ........Input size: 12921 KV Cache size: {'key': 13385, 'value': 13385, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:35:48,332 - INFO - ........Input size: 16674 KV Cache size: {'key': 17185, 'value': 17185, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:36:04,430 - INFO - ........Input size: 13263 KV Cache size: {'key': 13565, 'value': 13565, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:36:25,216 - INFO - ........Input size: 4659 KV Cache size: {'key': 5069, 'value': 5069, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:36:46,545 - INFO - ........Input size: 15289 KV Cache size: {'key': 15630, 'value': 15630, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:37:07,452 - INFO - ........Input size: 10615 KV Cache size: {'key': 11033, 'value': 11033, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:37:26,501 - INFO - ........Input size: 21960 KV Cache size: {'key': 22194, 'value': 22194, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:37:52,054 - INFO - ........Input size: 17666 KV Cache size: {'key': 18034, 'value': 18034, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:38:35,354 - INFO - ........Input size: 25337 KV Cache size: {'key': 25848, 'value': 25848, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:38:56,290 - INFO - ........Input size: 10464 KV Cache size: {'key': 10862, 'value': 10862, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:39:11,620 - INFO - ........Input size: 10394 KV Cache size: {'key': 10672, 'value': 10672, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:39:36,827 - INFO - ........Input size: 10907 KV Cache size: {'key': 11405, 'value': 11405, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:39:58,123 - INFO - ........Input size: 8962 KV Cache size: {'key': 9390, 'value': 9390, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:40:24,418 - INFO - ........Input size: 7851 KV Cache size: {'key': 8357, 'value': 8357, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:40:36,042 - INFO - ........Input size: 12871 KV Cache size: {'key': 13090, 'value': 13090, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:40:48,520 - INFO - ........Input size: 15198 KV Cache size: {'key': 15391, 'value': 15391, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:41:08,383 - INFO - ........Input size: 8475 KV Cache size: {'key': 8866, 'value': 8866, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:41:27,170 - INFO - ........Input size: 5823 KV Cache size: {'key': 6181, 'value': 6181, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:42:32,290 - INFO - ........Input size: 39843 KV Cache size: {'key': 40354, 'value': 40354, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:42:58,226 - INFO - ........Input size: 7732 KV Cache size: {'key': 8243, 'value': 8243, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:43:23,371 - INFO - ........Input size: 6414 KV Cache size: {'key': 6925, 'value': 6925, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:44:32,004 - INFO - ........Input size: 43420 KV Cache size: {'key': 43920, 'value': 43920, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:44:54,878 - INFO - ........Input size: 8151 KV Cache size: {'key': 8616, 'value': 8616, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:45:14,462 - INFO - ........Input size: 5629 KV Cache size: {'key': 6009, 'value': 6009, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:45:30,203 - INFO - ........Input size: 8628 KV Cache size: {'key': 8922, 'value': 8922, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:45:56,876 - INFO - ........Input size: 11631 KV Cache size: {'key': 12137, 'value': 12137, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:46:10,501 - INFO - ........Input size: 8216 KV Cache size: {'key': 8478, 'value': 8478, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:46:36,895 - INFO - ........Input size: 4665 KV Cache size: {'key': 5159, 'value': 5159, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:46:55,963 - INFO - ........Input size: 7435 KV Cache size: {'key': 7783, 'value': 7783, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:47:19,396 - INFO - ........Input size: 17695 KV Cache size: {'key': 18050, 'value': 18050, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:47:53,317 - INFO - ........Input size: 18337 KV Cache size: {'key': 18826, 'value': 18826, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:48:21,070 - INFO - ........Input size: 18326 KV Cache size: {'key': 18749, 'value': 18749, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:48:42,518 - INFO - ........Input size: 6381 KV Cache size: {'key': 6791, 'value': 6791, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:48:58,772 - INFO - ........Input size: 7130 KV Cache size: {'key': 7441, 'value': 7441, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:49:19,109 - INFO - ........Input size: 9789 KV Cache size: {'key': 10188, 'value': 10188, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:49:38,902 - INFO - ........Input size: 11458 KV Cache size: {'key': 11829, 'value': 11829, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:49:57,960 - INFO - ........Input size: 3905 KV Cache size: {'key': 4267, 'value': 4267, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:50:24,128 - INFO - ........Input size: 15559 KV Cache size: {'key': 16010, 'value': 16010, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:51:05,304 - INFO - ........Input size: 22413 KV Cache size: {'key': 22918, 'value': 22918, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:51:15,595 - INFO - ........Input size: 4900 KV Cache size: {'key': 5094, 'value': 5094, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:51:27,982 - INFO - ........Input size: 3061 KV Cache size: {'key': 3299, 'value': 3299, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:51:47,283 - INFO - ........Input size: 12146 KV Cache size: {'key': 12516, 'value': 12516, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:52:13,074 - INFO - ........Input size: 2810 KV Cache size: {'key': 3321, 'value': 3321, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:52:38,536 - INFO - ........Input size: 4595 KV Cache size: {'key': 5106, 'value': 5106, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:52:58,361 - INFO - ........Input size: 14982 KV Cache size: {'key': 15303, 'value': 15303, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:53:24,811 - INFO - ........Input size: 11716 KV Cache size: {'key': 12213, 'value': 12213, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:53:43,002 - INFO - ........Input size: 6415 KV Cache size: {'key': 6759, 'value': 6759, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:54:04,111 - INFO - ........Input size: 10174 KV Cache size: {'key': 10574, 'value': 10574, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:54:19,592 - INFO - ........Input size: 11804 KV Cache size: {'key': 12085, 'value': 12085, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:54:39,554 - INFO - ........Input size: 7631 KV Cache size: {'key': 8008, 'value': 8008, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:55:03,462 - INFO - ........Input size: 7329 KV Cache size: {'key': 7790, 'value': 7790, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:55:21,662 - INFO - ........Input size: 6682 KV Cache size: {'key': 7041, 'value': 7041, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:55:39,639 - INFO - ........Input size: 20394 KV Cache size: {'key': 20632, 'value': 20632, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:55:49,696 - INFO - ........Input size: 6576 KV Cache size: {'key': 6778, 'value': 6778, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:56:09,151 - INFO - ........Input size: 13496 KV Cache size: {'key': 13848, 'value': 13848, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:56:34,258 - INFO - ........Input size: 26767 KV Cache size: {'key': 27021, 'value': 27021, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:56:52,649 - INFO - ........Input size: 5072 KV Cache size: {'key': 5418, 'value': 5418, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:57:13,824 - INFO - ........Input size: 7232 KV Cache size: {'key': 7643, 'value': 7643, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:57:37,324 - INFO - ........Input size: 2634 KV Cache size: {'key': 3081, 'value': 3081, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:57:54,114 - INFO - ........Input size: 8797 KV Cache size: {'key': 9127, 'value': 9127, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:58:41,509 - INFO - ........Input size: 27047 KV Cache size: {'key': 27558, 'value': 27558, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:58:56,783 - INFO - ........Input size: 4426 KV Cache size: {'key': 4718, 'value': 4718, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:59:15,316 - INFO - ........Input size: 6082 KV Cache size: {'key': 6446, 'value': 6446, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:59:32,674 - INFO - ........Input size: 6436 KV Cache size: {'key': 6764, 'value': 6764, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 12:59:59,459 - INFO - ........Input size: 4962 KV Cache size: {'key': 5473, 'value': 5473, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:00:26,287 - INFO - ........Input size: 11370 KV Cache size: {'key': 11881, 'value': 11881, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:00:46,941 - INFO - ........Input size: 7898 KV Cache size: {'key': 8315, 'value': 8315, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:01:04,157 - INFO - ........Input size: 6766 KV Cache size: {'key': 7090, 'value': 7090, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:01:21,587 - INFO - ........Input size: 7286 KV Cache size: {'key': 7620, 'value': 7620, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:01:35,348 - INFO - ........Input size: 7784 KV Cache size: {'key': 8040, 'value': 8040, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:01:48,668 - INFO - ........Input size: 6353 KV Cache size: {'key': 6593, 'value': 6593, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:02:15,440 - INFO - ........Input size: 2860 KV Cache size: {'key': 3371, 'value': 3371, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:02:30,506 - INFO - ........Input size: 4186 KV Cache size: {'key': 4469, 'value': 4469, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:02:50,638 - INFO - ........Input size: 7828 KV Cache size: {'key': 8239, 'value': 8239, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:03:05,192 - INFO - ........Input size: 11085 KV Cache size: {'key': 11356, 'value': 11356, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:03:31,692 - INFO - ........Input size: 4640 KV Cache size: {'key': 5151, 'value': 5151, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:03:57,866 - INFO - ........Input size: 3283 KV Cache size: {'key': 3794, 'value': 3794, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:04:59,193 - INFO - ........Input size: 51428 KV Cache size: {'key': 51805, 'value': 51805, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:05:15,202 - INFO - ........Input size: 13649 KV Cache size: {'key': 13919, 'value': 13919, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:05:42,331 - INFO - ........Input size: 7394 KV Cache size: {'key': 7905, 'value': 7905, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:05:57,333 - INFO - ........Input size: 7107 KV Cache size: {'key': 7400, 'value': 7400, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:06:16,398 - INFO - ........Input size: 10741 KV Cache size: {'key': 11117, 'value': 11117, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:06:39,040 - INFO - ........Input size: 6736 KV Cache size: {'key': 7165, 'value': 7165, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:07:01,913 - INFO - ........Input size: 14049 KV Cache size: {'key': 14456, 'value': 14456, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:07:13,563 - INFO - ........Input size: 7773 KV Cache size: {'key': 7984, 'value': 7984, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:07:42,830 - INFO - ........Input size: 14460 KV Cache size: {'key': 14968, 'value': 14968, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:08:28,191 - INFO - ........Input size: 25835 KV Cache size: {'key': 26346, 'value': 26346, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:08:54,635 - INFO - ........Input size: 9525 KV Cache size: {'key': 10036, 'value': 10036, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:09:19,636 - INFO - ........Input size: 10692 KV Cache size: {'key': 11160, 'value': 11160, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:09:40,509 - INFO - ........Input size: 19790 KV Cache size: {'key': 20060, 'value': 20060, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:10:06,460 - INFO - ........Input size: 13222 KV Cache size: {'key': 13702, 'value': 13702, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:10:27,853 - INFO - ........Input size: 7092 KV Cache size: {'key': 7498, 'value': 7498, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:10:47,353 - INFO - ........Input size: 4632 KV Cache size: {'key': 5023, 'value': 5023, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:10:47,767 - INFO - ........Input size: 4821 KV Cache size: {'key': 4822, 'value': 4822, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:11:13,729 - INFO - ........Input size: 6508 KV Cache size: {'key': 7019, 'value': 7019, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:11:32,541 - INFO - ........Input size: 9981 KV Cache size: {'key': 10343, 'value': 10343, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:11:54,765 - INFO - ........Input size: 14701 KV Cache size: {'key': 15064, 'value': 15064, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:12:15,608 - INFO - ........Input size: 6957 KV Cache size: {'key': 7380, 'value': 7380, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:12:24,123 - INFO - ........Input size: 2505 KV Cache size: {'key': 2676, 'value': 2676, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:12:49,635 - INFO - ........Input size: 10501 KV Cache size: {'key': 10984, 'value': 10984, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:12:50,098 - INFO - ........Input size: 5536 KV Cache size: {'key': 5537, 'value': 5537, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:13:06,707 - INFO - ........Input size: 10432 KV Cache size: {'key': 10758, 'value': 10758, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:13:26,608 - INFO - ........Input size: 5712 KV Cache size: {'key': 6091, 'value': 6091, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:13:26,962 - INFO - ........Input size: 3953 KV Cache size: {'key': 3954, 'value': 3954, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:13:55,163 - INFO - ........Input size: 13431 KV Cache size: {'key': 13942, 'value': 13942, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:14:14,819 - INFO - ........Input size: 2871 KV Cache size: {'key': 3261, 'value': 3261, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:14:34,008 - INFO - ........Input size: 7724 KV Cache size: {'key': 8089, 'value': 8089, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:14:44,979 - INFO - ........Input size: 2999 KV Cache size: {'key': 3226, 'value': 3226, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:15:08,219 - INFO - ........Input size: 10704 KV Cache size: {'key': 11139, 'value': 11139, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:15:28,554 - INFO - ........Input size: 9329 KV Cache size: {'key': 9715, 'value': 9715, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:15:49,797 - INFO - ........Input size: 11603 KV Cache size: {'key': 12015, 'value': 12015, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:16:14,002 - INFO - ........Input size: 3712 KV Cache size: {'key': 4186, 'value': 4186, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:16:31,169 - INFO - ........Input size: 5718 KV Cache size: {'key': 6043, 'value': 6043, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:16:59,628 - INFO - ........Input size: 17427 KV Cache size: {'key': 17870, 'value': 17870, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:17:23,495 - INFO - ........Input size: 7179 KV Cache size: {'key': 7630, 'value': 7630, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:17:36,019 - INFO - ........Input size: 9873 KV Cache size: {'key': 10098, 'value': 10098, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:17:59,856 - INFO - ........Input size: 11992 KV Cache size: {'key': 12441, 'value': 12441, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:18:24,477 - INFO - ........Input size: 6507 KV Cache size: {'key': 6982, 'value': 6982, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:18:49,535 - INFO - ........Input size: 15989 KV Cache size: {'key': 16403, 'value': 16403, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:19:16,308 - INFO - ........Input size: 11879 KV Cache size: {'key': 12390, 'value': 12390, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:19:33,370 - INFO - ........Input size: 8012 KV Cache size: {'key': 8334, 'value': 8334, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:20:00,035 - INFO - ........Input size: 10705 KV Cache size: {'key': 11216, 'value': 11216, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:20:12,391 - INFO - ........Input size: 4218 KV Cache size: {'key': 4461, 'value': 4461, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:20:38,255 - INFO - ........Input size: 3701 KV Cache size: {'key': 4212, 'value': 4212, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:21:04,340 - INFO - ........Input size: 3493 KV Cache size: {'key': 4004, 'value': 4004, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:21:30,318 - INFO - ........Input size: 4198 KV Cache size: {'key': 4709, 'value': 4709, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:21:48,413 - INFO - ........Input size: 6057 KV Cache size: {'key': 6401, 'value': 6401, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:21:59,539 - INFO - ........Input size: 4731 KV Cache size: {'key': 4962, 'value': 4962, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:22:24,864 - INFO - ........Input size: 9544 KV Cache size: {'key': 10055, 'value': 10055, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:22:37,879 - INFO - ........Input size: 6178 KV Cache size: {'key': 6431, 'value': 6431, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:23:00,361 - INFO - ........Input size: 7029 KV Cache size: {'key': 7480, 'value': 7480, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:23:26,554 - INFO - ........Input size: 10314 KV Cache size: {'key': 10825, 'value': 10825, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:24:01,913 - INFO - ........Input size: 18156 KV Cache size: {'key': 18667, 'value': 18667, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:24:13,602 - INFO - ........Input size: 18556 KV Cache size: {'key': 18721, 'value': 18721, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:24:53,539 - INFO - ........Input size: 22079 KV Cache size: {'key': 22590, 'value': 22590, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:25:10,475 - INFO - ........Input size: 8184 KV Cache size: {'key': 8519, 'value': 8519, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:25:31,116 - INFO - ........Input size: 7471 KV Cache size: {'key': 7878, 'value': 7878, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:25:51,861 - INFO - ........Input size: 12337 KV Cache size: {'key': 12728, 'value': 12728, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:26:17,957 - INFO - ........Input size: 18140 KV Cache size: {'key': 18513, 'value': 18513, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:26:35,911 - INFO - ........Input size: 14648 KV Cache size: {'key': 14966, 'value': 14966, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:26:47,975 - INFO - ........Input size: 6232 KV Cache size: {'key': 6462, 'value': 6462, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:27:14,603 - INFO - ........Input size: 7769 KV Cache size: {'key': 8280, 'value': 8280, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:27:36,870 - INFO - ........Input size: 4627 KV Cache size: {'key': 5055, 'value': 5055, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:27:56,358 - INFO - ........Input size: 10834 KV Cache size: {'key': 11217, 'value': 11217, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:28:12,063 - INFO - ........Input size: 6172 KV Cache size: {'key': 6472, 'value': 6472, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:28:35,845 - INFO - ........Input size: 9449 KV Cache size: {'key': 9915, 'value': 9915, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:28:45,402 - INFO - ........Input size: 3600 KV Cache size: {'key': 3784, 'value': 3784, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:29:10,940 - INFO - ........Input size: 13154 KV Cache size: {'key': 13622, 'value': 13622, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:29:34,920 - INFO - ........Input size: 10421 KV Cache size: {'key': 10875, 'value': 10875, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:29:52,529 - INFO - ........Input size: 6441 KV Cache size: {'key': 6779, 'value': 6779, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:30:19,762 - INFO - ........Input size: 13575 KV Cache size: {'key': 14063, 'value': 14063, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:30:36,400 - INFO - ........Input size: 12154 KV Cache size: {'key': 12459, 'value': 12459, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:30:53,397 - INFO - ........Input size: 2818 KV Cache size: {'key': 3151, 'value': 3151, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:31:09,736 - INFO - ........Input size: 4673 KV Cache size: {'key': 4991, 'value': 4991, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:31:25,922 - INFO - ........Input size: 7767 KV Cache size: {'key': 8079, 'value': 8079, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:31:49,694 - INFO - ........Input size: 9436 KV Cache size: {'key': 9904, 'value': 9904, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:32:01,216 - INFO - ........Input size: 4270 KV Cache size: {'key': 4497, 'value': 4497, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:32:17,186 - INFO - ........Input size: 14369 KV Cache size: {'key': 14654, 'value': 14654, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:32:44,094 - INFO - ........Input size: 11516 KV Cache size: {'key': 12027, 'value': 12027, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:33:05,642 - INFO - ........Input size: 3510 KV Cache size: {'key': 3928, 'value': 3928, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:33:32,626 - INFO - ........Input size: 12322 KV Cache size: {'key': 12833, 'value': 12833, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
+2025-01-12 13:33:49,163 - INFO - ........Input size: 6362 KV Cache size: {'key': 6684, 'value': 6684, 'attn_wts': 0}...........GPU Max Reserved: 45.93811456 GB
+
