@@ -10,82 +10,7 @@ from transformers.utils import is_hqq_available, is_quanto_available, logging
 
 logger = logging.get_logger(__name__)
 
-
-class Cache(torch.nn.Module):
-    """
-    Base, abstract class for all caches. The actual data structure is specific to each subclass.
-    """
-
-    def __init__(self):
-        super().__init__()
-
-    def update(
-        self,
-        key_states: torch.Tensor,
-        value_states: torch.Tensor,
-        layer_idx: int,
-        cache_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
-
-        Parameters:
-            key_states (`torch.Tensor`):
-                The new key states to cache.
-            value_states (`torch.Tensor`):
-                The new value states to cache.
-            layer_idx (`int`):
-                The index of the layer to cache the states for.
-            cache_kwargs (`Dict[str, Any]`, `optional`):
-                Additional arguments for the cache subclass. These are specific to each subclass and allow new types of
-                cache to be created.
-
-        Return:
-            A tuple containing the updated key and value states.
-        """
-        raise NotImplementedError("Make sure to implement `update` in a subclass.")
-
-    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-        """Returns the sequence length of the cached states. A layer index can be optionally passed."""
-        # TODO: deprecate this function in favor of `cache_position`
-        raise NotImplementedError("Make sure to implement `get_seq_length` in a subclass.")
-
-    def get_max_length(self) -> Optional[int]:
-        """Returns the maximum sequence length of the cached states, if there is any."""
-        raise NotImplementedError("Make sure to implement `get_max_length` in a subclass.")
-
-    def get_usable_length(self, new_seq_length: int, layer_idx: Optional[int] = 0) -> int:
-        """Given the sequence length of the new inputs, returns the usable length of the cache."""
-        # Cache without size limit -> all cache is usable
-        # Cache with size limit -> if the length cache plus the length of the new inputs is larger the maximum cache
-        #   length, we will need to evict part of the cache (and thus not all cache is usable)
-        max_length = self.get_max_length()
-        previous_seq_length = self.get_seq_length(layer_idx)
-        if max_length is not None and previous_seq_length + new_seq_length > max_length:
-            return max_length - new_seq_length
-        return previous_seq_length
-
-    def reorder_cache(self, beam_idx: torch.LongTensor):
-        """Reorders the cache for beam search, given the selected beam indices."""
-        for layer_idx in range(len(self.key_cache)):
-            if self.key_cache[layer_idx] != []:
-                device = self.key_cache[layer_idx].device
-                self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, beam_idx.to(device))
-            if self.value_cache[layer_idx] != []:
-                device = self.value_cache[layer_idx].device
-                self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, beam_idx.to(device))
-
-    @property
-    def seen_tokens(self):
-        logger.warning_once(
-            "The `seen_tokens` attribute is deprecated and will be removed in v4.41. Use the `cache_position` "
-            "model input instead."
-        )
-        if hasattr(self, "_seen_tokens"):
-            return self._seen_tokens
-        else:
-            return None
-
+from transformers.cache_utils import Cache
 
 class DynamicCache(Cache):
     """
@@ -200,12 +125,15 @@ class DynamicCache(Cache):
                 init_mask_attn = init_mask_attn.expand(BS,NH,WS,LEN)
                 indices_attn = (init_mask_attn.reshape(-1)==0).nonzero(as_tuple=True)[0]
                 self.attn_cache[layer_idx] = torch.index_select(self.attn_cache[layer_idx].view(-1),dim=0,index=indices_attn).reshape(BS,NH,WS,-1)
-                
+            if layer_idx==0:
+                if self.key_cache[layer_idx] != []: self.cache_size['key'] = max(self.cache_size['key'],self.key_cache[layer_idx].shape[2])#len(self.key_cache) * self.key_cache[0].shape[0] * self.key_cache[0].shape[1] * self.key_cache[0].shape[2] * self.key_cache[0].shape[3])
+                if self.value_cache[layer_idx] != []: self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2]) #len(self.value_cache) * self.value_cache[0].shape[0] * self.value_cache[0].shape[1] * self.value_cache[0].shape[2] * self.value_cache[0].shape[3])
+                if self.attn_cache[layer_idx] != []: self.cache_size['attn_wts'] = max(self.cache_size['attn_wts'], self.attn_cache[layer_idx].shape[2]) #len(self.attn_cache) * self.attn_cache[0].shape[0] * self.attn_cache[0].shape[1] * self.attn_cache[0].shape[2] * self.attn_cache[0].shape[3])    
         # Profiling memory
         if layer_idx==0:
-            if self.key_cache[layer_idx] != []: self.cache_size['key'] = max(self.cache_size['key'],self.key_cache[layer_idx].shape[2])#len(self.key_cache) * self.key_cache[0].shape[0] * self.key_cache[0].shape[1] * self.key_cache[0].shape[2] * self.key_cache[0].shape[3])
-            if self.value_cache[layer_idx] != []: self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2]) #len(self.value_cache) * self.value_cache[0].shape[0] * self.value_cache[0].shape[1] * self.value_cache[0].shape[2] * self.value_cache[0].shape[3])
-            if self.attn_cache[layer_idx] != []: self.cache_size['attn_wts'] = max(self.cache_size['attn_wts'], self.attn_cache[layer_idx].shape[2]) #len(self.attn_cache) * self.attn_cache[0].shape[0] * self.attn_cache[0].shape[1] * self.attn_cache[0].shape[2] * self.attn_cache[0].shape[3])
+            # if self.key_cache[layer_idx] != []: self.cache_size['key'] = max(self.cache_size['key'],self.key_cache[layer_idx].shape[2])#len(self.key_cache) * self.key_cache[0].shape[0] * self.key_cache[0].shape[1] * self.key_cache[0].shape[2] * self.key_cache[0].shape[3])
+            # if self.value_cache[layer_idx] != []: self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2]) #len(self.value_cache) * self.value_cache[0].shape[0] * self.value_cache[0].shape[1] * self.value_cache[0].shape[2] * self.value_cache[0].shape[3])
+            # if self.attn_cache[layer_idx] != []: self.cache_size['attn_wts'] = max(self.cache_size['attn_wts'], self.attn_cache[layer_idx].shape[2]) #len(self.attn_cache) * self.attn_cache[0].shape[0] * self.attn_cache[0].shape[1] * self.attn_cache[0].shape[2] * self.attn_cache[0].shape[3])
             if not self.prefill:
                 self.cache_size['len'] = LEN
             else:
@@ -262,7 +190,8 @@ class DynamicCache(Cache):
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
         
-        self.input_size = min(self.input_size,self.key_cache[layer_idx].shape[2])
+        if self.input_size==torch.inf:
+            self.input_size = self.key_cache[layer_idx].shape[2]
         
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
@@ -294,7 +223,7 @@ class DynamicCache(Cache):
         cache = cls(num_hidden_layers)
         if past_key_values is not None:
             for layer_idx in range(len(past_key_values)):
-                key_states, value_states = past_key_values[layer_idx]
+                key_states, value_states, _ = past_key_values[layer_idx]
                 cache.update(key_states, value_states, layer_idx)
         return cache
 
@@ -354,7 +283,7 @@ class DynamicCache(Cache):
 
 
 # This implementation has been adopted from HuggingFace's OffloadedCache
-class OffloadedCache(DynamicCache):
+class MorphOffloadedCache(DynamicCache):
     """
     A drop-in replacement for DynamicCache that conserves GPU memory at the expense of more CPU memory.
     Useful for generating from models with very long context.
@@ -379,7 +308,7 @@ class OffloadedCache(DynamicCache):
 
     def prefetch_layer(self, layer_idx: int):
         "Starts prefetching the next layer cache"
-        if layer_idx < len(self):
+        if layer_idx < len(self) and self.key_cache[layer_idx]!=[]:
             with torch.cuda.stream(self.prefetch_stream):
                 # Prefetch next layer tensors to GPU
                 device = self.original_device[layer_idx]
@@ -441,6 +370,7 @@ class OffloadedCache(DynamicCache):
         key_states: torch.Tensor,
         value_states: torch.Tensor,
         layer_idx: int,
+        cache_kwargs: Optional[Dict[str, Any]] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
@@ -484,7 +414,8 @@ class OffloadedCache(DynamicCache):
             self.value_cache[layer_idx] = torch.cat([value_tensor, value_states], dim=-2)
             
         
-        self.input_size = min(self.input_size,self.key_cache[layer_idx].shape[2])
+        if self.input_size==torch.inf:
+            self.input_size = self.key_cache[layer_idx].shape[2]
         
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 

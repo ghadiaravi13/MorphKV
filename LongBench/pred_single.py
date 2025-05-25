@@ -4,6 +4,18 @@ import torch
 import json
 import transformers
 from transformers import AutoTokenizer, LlamaTokenizer, LlamaForCausalLM, AutoModelForCausalLM, AutoConfig
+
+# CRITICAL: Apply monkey patches immediately after transformers import
+# but before any model operations
+import sys
+sys.path.append("/home/rhg659/MorphKV/")
+
+# Import the patching function and apply it immediately
+from morphkv.monkeypatch import patch_mistral
+print("Applying MorphKV patches...")
+patch_mistral()
+print("MorphKV patches applied successfully!")
+
 from tqdm import tqdm
 import numpy as np
 import random
@@ -14,51 +26,9 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.profiler
 
-import sys
-sys.path.append("/home/rhg659/MorphKV/")
-
-import sys
-import importlib
-import transformers
-
-# First, define your MorphKV classes (assuming these are defined elsewhere)
-# from your_module import MistralAttentionMorph, MistralFlashAttention2Morph, OffloadedCache, GenerationMixin
+# Import MorphKV components (these are now available after patching)
 from morphkv.models.patch_mistral import MistralAttentionMorph, MistralFlashAttention2Morph
-# from morphkv.morph_cache import OffloadedCache, Cache
-from morphkv.gen_utils import GenerationMixin
-
-# If there's any chance the modules were already imported, reload them
-# if "transformers.models.mistral.modeling_mistral" in sys.modules:
-#     importlib.reload(sys.modules["transformers.models.mistral.modeling_mistral"])
-# if "transformers.cache_utils" in sys.modules:
-#     importlib.reload(sys.modules["transformers.cache_utils"])
-# if "transformers.generation.utils" in sys.modules:
-#     importlib.reload(sys.modules["transformers.generation.utils"])
-
-# Now apply the patches
-print("Patching Mistral using MorphKV...\n")
-
-# Import explicitly to ensure the modules are loaded
-# import transformers.models.mistral.modeling_mistral
-# import transformers.cache_utils
-# import transformers.generation.utils
-
-# Apply the monkey patches
-# transformers.models.mistral.modeling_mistral.MistralAttention = MistralAttentionMorph
-# transformers.models.mistral.modeling_mistral.MistralFlashAttention2 = MistralFlashAttention2Morph
-# transformers.cache_utils.Cache = Cache
-# transformers.cache_utils.DynamicCache = OffloadedCache
-# transformers.generation.utils.GenerationMixin = GenerationMixin
-
-from morphkv.monkeypatch import patch_mistral
-
-# import transformers 
-
-# def patch_mistral():
-#     transformers.models.mistral.modeling_mistral.MistralAttention = MistralAttentionMorph
-#     transformers.models.mistral.modeling_mistral.MistralFlashAttention2 = MistralFlashAttention2Morph
-    # transformers.cache_utils.DynamicCache = OffloadedCache
-    # transformers.generation.utils.GenerationMixin = GenerationMixin
+# from morphkv.gen_utils import GenerationMixin
 
 import logging
 import logging.handlers
@@ -248,20 +218,7 @@ def load_model_and_tokenizer(path, model_name, device, args):
         cache_dir = "/home/shared/model_chkpts/"
         os.makedirs(cache_dir, exist_ok=True)
 
-        if "mistral" in model_name:
-            print("Patched Mistral using MorphKV...\n")
-            patch_mistral()
-            # Verify the patching worked
-            print("Current FlashAttention2 class:", transformers.models.mistral.modeling_mistral.MistralFlashAttention2.__name__)
-            print("Current Attention class:", transformers.models.mistral.modeling_mistral.MistralAttention.__name__)
-            print("Current Cache class:", transformers.cache_utils.DynamicCache.__name__)
-
-        #     transformers.models.mistral.modeling_mistral.MistralAttention = MistralAttentionMorph
-            # transformers.models.mistral.modeling_mistral.MistralFlashAttention2 = MistralFlashAttention2Morph
-            # transformers.cache_utils.DynamicCache = OffloadedCache
-            # transformers.generation.utils.GenerationMixin = GenerationMixin
-        # Load the Llama3 7B model and tokenizer
-        # model_name = "meta-llama/Llama-3.1-8B-Instruct"
+        # Load the model and tokenizer
         from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(path, cache_dir=cache_dir)
 
@@ -269,8 +226,6 @@ def load_model_and_tokenizer(path, model_name, device, args):
         config = AutoConfig.from_pretrained(path, cache_dir=cache_dir)
         config._attn_implementation = "flash_attention_2"
         
-        # config.hopformer = None
-
         config.morphkv = None if args.no_morph else {
             'window_size': int(args.window_size),
             'morph_type': args.morph_type,
@@ -279,27 +234,23 @@ def load_model_and_tokenizer(path, model_name, device, args):
         }
         print(f"MorphKV is: {config.morphkv}")
         
-        # import pdb; pdb.set_trace() 
-        # from transformers import AutoModelForCausalLM     
         model = AutoModelForCausalLM.from_pretrained(
             path,
             config=config,
             torch_dtype=torch.float16,
             cache_dir=cache_dir).to(device)
         
-        # Load the model with the custom configuration
-        
-        
-        
     elif "longchat" in model_name or "vicuna" in model_name:
         assert False, "Models unsupported\n"
     model = model.eval()
-    import pdb; pdb.set_trace()
+    
     # Verify the loaded model uses the correct classes
+    print("Verifying that MorphKV classes are being used:")
     for name, module in model.named_modules():
         if isinstance(module, transformers.models.mistral.modeling_mistral.MistralAttention) or \
         isinstance(module, transformers.models.mistral.modeling_mistral.MistralFlashAttention2):
             print(f"Module {name} is of type: {type(module).__name__}")
+            break  # Just show the first one to confirm it's working
     return model, tokenizer
 
 if __name__ == '__main__':
