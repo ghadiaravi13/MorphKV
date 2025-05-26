@@ -23,7 +23,7 @@ from transformers.utils import (
     is_flash_attn_greater_or_equal_2_10,
     logging,
 )
-from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.phi3.configuration_phi3 import Phi3Config
 from morphkv.morph_cache import MorphOffloadedCache
 
 # Try to import flash attention, but handle broken installations gracefully
@@ -37,79 +37,26 @@ if is_flash_attn_2_available():
 
 logger = logging.get_logger(__name__)
 
-
-class LlamaRotaryEmbedding(nn.Module):
-    def __init__(
-        self,
-        dim=None,
-        max_position_embeddings=2048,
-        base=10000,
-        device=None,
-        scaling_factor=1.0,
-        rope_type="default",
-        config: Optional[LlamaConfig] = None,
-    ):
+# Copied from transformers.models.gemma.modeling_gemma.GemmaRotaryEmbedding with gemma->phi3, Gemma->Phi3
+class Phi3RotaryEmbedding(nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
-        # TODO (joao): remove the `if` below, only used for BC
-        self.rope_kwargs = {}
-        if config is None:
-            logger.warning_once(
-                "`LlamaRotaryEmbedding` can now be fully parameterized by passing the model config through the "
-                "`config` argument. All other arguments will be removed in v4.46"
-            )
-            self.rope_kwargs = {
-                "rope_type": rope_type,
-                "factor": scaling_factor,
-                "dim": dim,
-                "base": base,
-                "max_position_embeddings": max_position_embeddings,
-            }
-            self.rope_type = rope_type
-            self.max_seq_len_cached = max_position_embeddings
-            self.original_max_seq_len = max_position_embeddings
-        else:
-            # BC: "rope_type" was originally "type"
-            if config.rope_scaling is not None:
-                self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-            else:
-                self.rope_type = "default"
-            self.max_seq_len_cached = config.max_position_embeddings
-            self.original_max_seq_len = config.max_position_embeddings
 
-        self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
 
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device, **self.rope_kwargs)
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self.original_inv_freq = self.inv_freq
-
-    def _dynamic_frequency_update(self, position_ids, device):
-        """
-        dynamic RoPE layers should recompute `inv_freq` in the following situations:
-        1 - growing beyond the cached sequence length (allow scaling)
-        2 - the current sequence length is in the original scale (avoid losing precision with small sequences)
-        """
-        seq_len = torch.max(position_ids) + 1
-        if seq_len > self.max_seq_len_cached:  # growth
-            inv_freq, self.attention_scaling = self.rope_init_fn(
-                self.config, device, seq_len=seq_len, **self.rope_kwargs
-            )
-            self.register_buffer("inv_freq", inv_freq, persistent=False)  # TODO joao: may break with compilation
-            self.max_seq_len_cached = seq_len
-
-        if seq_len < self.original_max_seq_len and self.max_seq_len_cached > self.original_max_seq_len:  # reset
-            self.register_buffer("inv_freq", self.original_inv_freq, persistent=False)
-            self.max_seq_len_cached = self.original_max_seq_len
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
+        self.register_buffer("inv_freq", tensor=inv_freq, persistent=False)
 
     @torch.no_grad()
-    def forward(self, x, position_ids):
-        if "dynamic" in self.rope_type:
-            self._dynamic_frequency_update(position_ids, device=x.device)
-
-        # Core RoPE block
+    def forward(self, x, position_ids, seq_len=None):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        self.inv_freq.to(x.device)
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
-        # Force float32 (see https://github.com/huggingface/transformers/pull/29285)
+        # Force float32 since bfloat16 loses precision on long contexts
+        # See https://github.com/huggingface/transformers/pull/29285
         device_type = x.device.type
         device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):
@@ -117,13 +64,9 @@ class LlamaRotaryEmbedding(nn.Module):
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos()
             sin = emb.sin()
-
-        # Advanced RoPE types (e.g. yarn) apply a post-processing scaling factor, equivalent to scaling attention
-        cos = cos * self.attention_scaling
-        sin = sin * self.attention_scaling
-
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
+# Copied from transformers.models.llama.modeling_llama.rotate_half
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
@@ -131,6 +74,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
+# Copied from transformers.models.llama.modeling_llama.apply_rotary_pos_emb
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """Applies Rotary Position Embedding to the query and key tensors.
 
@@ -157,7 +101,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
-# Copied from transformers.models.llama.modeling_llama.repeat_kv
+# Copied from transformers.models.llama.modeling_llama.repeat_kv with llama->phi
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -169,10 +113,10 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
-class LlamaAttentionMorph(nn.Module):
+class Phi3AttentionMorph(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: LlamaConfig, layer_idx: Optional[int] = None):
+    def __init__(self, config: Phi3Config, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -186,20 +130,25 @@ class LlamaAttentionMorph(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = getattr(config, "head_dim", self.hidden_size // self.num_heads)
+        self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
+        self.original_max_position_embeddings = config.original_max_position_embeddings
         self.rope_theta = config.rope_theta
+        self.rope_scaling = config.rope_scaling
         self.is_causal = True
 
-        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias)
+        if (self.head_dim * self.num_heads) != self.hidden_size:
+            raise ValueError(
+                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+                f" and `num_heads`: {self.num_heads})."
+            )
 
-        # TODO (joao): remove in v4.46 (RoPE is computed in the model, not in the decoder layers)
-        self.rotary_emb = LlamaRotaryEmbedding(config=self.config)
+        op_size = self.num_heads * self.head_dim + 2 * (self.num_key_value_heads * self.head_dim)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
+        self.qkv_proj = nn.Linear(self.hidden_size, op_size, bias=False)
+        self._init_rope()
 
         self.garbage = [True]*config.num_hidden_layers
         self.morph_type = ""
@@ -212,8 +161,21 @@ class LlamaAttentionMorph(nn.Module):
             self.morph_type = config.morphkv['morph_type'] 
             self.evict_after = config.morphkv['evict_after'] #for bursty eviction during generation, we evict only after cache is > max_capacity * evict_after (say, after every 10 tokens)
             self.window_queries = [None]*self.config.num_hidden_layers
-    
 
+    def _init_rope(self):
+        if self.rope_scaling is None:
+            self.rotary_emb = Phi3RotaryEmbedding(
+                self.head_dim,
+                max_position_embeddings=self.max_position_embeddings,
+                base=self.rope_theta,
+            )
+        else:
+            scaling_type = self.config.rope_scaling["type"]
+            if scaling_type == "longrope":
+                self.rotary_emb = Phi3LongRoPEScaledRotaryEmbedding(self.head_dim, self.config)
+            else:
+                raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
+    
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
         
         softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
@@ -254,34 +216,18 @@ class LlamaAttentionMorph(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        query_cache: List = None,  # will become mandatory in v4.46
-        **kwargs,
+        query_cache: List = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
         self.window_queries = query_cache
+
         bsz, q_len, _ = hidden_states.size()
 
-        if self.config.pretraining_tp > 1:
-            key_value_slicing = (self.num_key_value_heads * self.head_dim) // self.config.pretraining_tp
-            query_slices = self.q_proj.weight.split(
-                (self.num_heads * self.head_dim) // self.config.pretraining_tp, dim=0
-            )
-            key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
-            value_slices = self.v_proj.weight.split(key_value_slicing, dim=0)
-
-            query_states = [F.linear(hidden_states, query_slices[i]) for i in range(self.config.pretraining_tp)]
-            query_states = torch.cat(query_states, dim=-1)
-
-            key_states = [F.linear(hidden_states, key_slices[i]) for i in range(self.config.pretraining_tp)]
-            key_states = torch.cat(key_states, dim=-1)
-
-            value_states = [F.linear(hidden_states, value_slices[i]) for i in range(self.config.pretraining_tp)]
-            value_states = torch.cat(value_states, dim=-1)
-
-        else:
-            query_states = self.q_proj(hidden_states)
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
+        qkv = self.qkv_proj(hidden_states)
+        query_pos = self.num_heads * self.head_dim
+        query_states = qkv[..., :query_pos]
+        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
+        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -290,23 +236,24 @@ class LlamaAttentionMorph(nn.Module):
         query_heads = query_states.shape[1]
         key_heads = key_states.shape[1]
 
-        if position_embeddings is None:
-            logger.warning_once(
-                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
-                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
-                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
-                "removed and `position_embeddings` will be mandatory."
-            )
-            cos, sin = self.rotary_emb(value_states, position_ids)
-        else:
-            cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        cos, sin = self.rotary_emb(value_states, position_ids, seq_len=kv_seq_len)
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
+        # repeat k/v heads if n_kv_heads < n_heads
         if key_states.shape[1]!=query_states.shape[1]:
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -314,6 +261,7 @@ class LlamaAttentionMorph(nn.Module):
         if self.config.morphkv: # cache queries for MorphKV
             query_states = past_key_value.update_win_queries(query_states[:,:,-self.WIN_SIZE:,:],self.layer_idx)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        
         
         # use MorphKV only in generative phase, ie, when hidden states has 1 token (the newly generated)
         if self.config.morphkv and key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after:
@@ -331,13 +279,14 @@ class LlamaAttentionMorph(nn.Module):
             
         else:
             past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
-        if attention_mask is not None:  # no matter the length, we just slice it
+        if attention_mask is not None:
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-            attn_weights = attn_weights + causal_mask
+            attn_weights += causal_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+
         attn_output = torch.matmul(attn_weights, value_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
@@ -347,15 +296,9 @@ class LlamaAttentionMorph(nn.Module):
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        attn_output = attn_output.reshape(bsz, q_len, -1)
-
-        if self.config.pretraining_tp > 1:
-            attn_output = attn_output.split(self.hidden_size // self.config.pretraining_tp, dim=2)
-            o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
-            attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
-        else:
-            attn_output = self.o_proj(attn_output)
+        attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
@@ -363,13 +306,14 @@ class LlamaAttentionMorph(nn.Module):
         return attn_output, attn_weights, past_key_value
 
 
-class LlamaFlashAttention2Morph(LlamaAttentionMorph):
+class Phi3FlashAttention2Morph(Phi3AttentionMorph):
     """
-    Llama flash attention module. This module inherits from `LlamaAttention` as the weights of the module stays
+    Phi-3 flash attention module. This module inherits from `Phi3Attention` as the weights of the module stays
     untouched. The only required change would be on the forward pass where it needs to correctly call the public API of
     flash attention and deal with padding tokens in case the input contains any of them.
     """
 
+    # Copied from transformers.models.llama.modeling_llama.LlamaFlashAttention2.__init__
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -387,19 +331,13 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
         output_attentions: bool = False,
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        if isinstance(past_key_value, StaticCache):
-            raise ValueError(
-                "`static` cache implementation is not compatible with `attn_implementation==flash_attention_2` "
-                "make sure to use `sdpa` in the mean time, and open an issue at https://github.com/huggingface/transformers"
-            )
-        
+        # Phi3FlashAttention2 attention does not support output_attentions
         if hidden_states.shape[1]==1 and self.config.morphkv and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY:
             # logger.warning_once(
             #     "MistralModel was using MistralFlashAttention2 for prefilling, which does not support MorphKV eviction. Falling back to the eager attention implementation.\n\n"
             # )
-            return super(LlamaFlashAttention2Morph,self).forward(
+            return super(Phi3FlashAttention2Morph,self).forward(
                 hidden_states=hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -409,18 +347,20 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
                 cache_position=cache_position,
                 query_cache=self.window_queries if self.config.morphkv else None,
             )
-        
+
         output_attentions = False
-        
+
         # reset window queries for every new sequence
         if(hidden_states.shape[1]!=1):
             past_key_value.query_cache[self.layer_idx] = []
 
         bsz, q_len, _ = hidden_states.size()
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        qkv = self.qkv_proj(hidden_states)
+        query_pos = self.num_heads * self.head_dim
+        query_states = qkv[..., :query_pos]
+        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
+        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
 
         # Flash attention requires the input to have the shape
         # batch_size x seq_length x head_dim x hidden_dim
@@ -429,50 +369,75 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        if position_embeddings is None:
-            logger.warning_once(
-                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
-                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
-                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
-                "removed and `position_embeddings` will be mandatory."
-            )
-            cos, sin = self.rotary_emb(value_states, position_ids)
-        else:
-            cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+
+        # Because the input can be padded, the absolute sequence length depends on the max position id.
+        rotary_seq_len = (
+            max(kv_seq_len, position_ids[:, -1].max().item() + 1) if position_ids is not None else kv_seq_len
+        )
+
+        cos, sin = self.rotary_emb(value_states, seq_len=rotary_seq_len, position_ids=position_ids)
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            # Activate slicing cache only if the config has a value `sliding_windows` attribute
+            cache_has_contents = past_key_value.get_seq_length(self.layer_idx) > 0
+            if (
+                getattr(self.config, "sliding_window", None) is not None
+                and kv_seq_len > self.config.sliding_window
+                and cache_has_contents
+            ):
+                slicing_tokens = 1 - self.config.sliding_window
+
+                past_key = past_key_value[self.layer_idx][0]
+                past_value = past_key_value[self.layer_idx][1]
+
+                past_key = past_key[:, :, slicing_tokens:, :].contiguous()
+                past_value = past_value[:, :, slicing_tokens:, :].contiguous()
+
+                if past_key.shape[-2] != self.config.sliding_window - 1:
+                    raise ValueError(
+                        f"past key must have a shape of (`batch_size, num_heads, self.config.sliding_window-1, head_dim`), got"
+                        f" {past_key.shape}"
+                    )
+
+                if attention_mask is not None:
+                    attention_mask = attention_mask[:, slicing_tokens:]
+                    attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
+
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
         # repeat k/v heads if n_kv_heads < n_heads
         if key_states.shape[1]<query_states.shape[1]:
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
-        # to be able to avoid many of these transpose/reshape/view.
-        query_states = query_states.transpose(1, 2)
-        key_states = key_states.transpose(1, 2)
-        value_states = value_states.transpose(1, 2)
-
-        dropout_rate = self.attention_dropout if self.training else 0.0
+        attn_dropout = self.attention_dropout if self.training else 0.0
 
         # In PEFT, usually we cast the layer norms in float32 for training stability reasons
         # therefore the input hidden states gets silently casted in float32. Hence, we need
         # cast them back in the correct dtype just to be sure everything works as expected.
         # This might slowdown training & inference so it is recommended to not cast the LayerNorms
-        # in fp32. (LlamaRMSNorm handles it correctly)
+        # in fp32.
 
-        input_dtype = query_states.dtype
-        if input_dtype == torch.float32:
+        if query_states.dtype == torch.float32:
             if torch.is_autocast_enabled():
                 target_dtype = torch.get_autocast_gpu_dtype()
             # Handle the case where the model is quantized
             elif hasattr(self.config, "_pre_quantization_dtype"):
                 target_dtype = self.config._pre_quantization_dtype
             else:
-                target_dtype = self.q_proj.weight.dtype
+                target_dtype = self.qkv_proj.weight.dtype
 
             logger.warning_once(
                 f"The input hidden states seems to be silently casted in float32, this might be related to"
@@ -484,6 +449,11 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
             key_states = key_states.to(target_dtype)
             value_states = value_states.to(target_dtype)
 
+        # Reashape to the expected shape for Flash Attention
+        query_states = query_states.transpose(1, 2)
+        key_states = key_states.transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
+
         attn_output = _flash_attention_forward(
             query_states,
             key_states,
@@ -491,30 +461,30 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
             attention_mask,
             q_len,
             position_ids=position_ids,
-            dropout=dropout_rate,
-            sliding_window=getattr(self, "sliding_window", None),
+            dropout=attn_dropout,
+            sliding_window=getattr(self.config, "sliding_window", None),
             use_top_left_mask=self._flash_attn_uses_top_left_mask,
             is_causal=self.is_causal,
         )
+
         # cache win queries after attn output
         query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-self.WIN_SIZE:,:],self.layer_idx)
 
         past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
-
-        attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
-        
+
         return attn_output, attn_weights, past_key_value
 
-def llama_model_forward(
+def phi3_model_forward(
     self,
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
-    past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
+    past_key_values: Optional[List[torch.FloatTensor]] = None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
     use_cache: Optional[bool] = None,
     output_attentions: Optional[bool] = None,
@@ -527,6 +497,7 @@ def llama_model_forward(
         output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
     )
     use_cache = use_cache if use_cache is not None else self.config.use_cache
+
     return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
     if (input_ids is None) ^ (inputs_embeds is not None):
@@ -534,14 +505,12 @@ def llama_model_forward(
             "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
         )
 
-    if self.gradient_checkpointing and self.training and use_cache:
-        logger.warning_once(
-            "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
-        )
-        use_cache = False
-
-    if inputs_embeds is None:
-        inputs_embeds = self.embed_tokens(input_ids)
+    if self.gradient_checkpointing and self.training:
+        if use_cache:
+            logger.warning_once(
+                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
+            )
+            use_cache = False
 
     # kept for BC (non `Cache` `past_key_values` inputs)
     return_legacy_cache = False
@@ -557,6 +526,9 @@ def llama_model_forward(
                 "(https://huggingface.co/docs/transformers/kv_cache#legacy-cache-format)"
             )
 
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
+
     if cache_position is None:
         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
         cache_position = torch.arange(
@@ -568,10 +540,8 @@ def llama_model_forward(
     causal_mask = self._update_causal_mask(
         attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
     )
-    hidden_states = inputs_embeds
 
-    # create position embeddings to be shared across the decoder layers
-    position_embeddings = self.rotary_emb(hidden_states, position_ids)
+    hidden_states = inputs_embeds
 
     # decoder layers
     all_hidden_states = () if output_hidden_states else None
@@ -592,7 +562,6 @@ def llama_model_forward(
                 output_attentions,
                 use_cache,
                 cache_position,
-                position_embeddings,
             )
         else:
             layer_outputs = decoder_layer(
@@ -603,7 +572,6 @@ def llama_model_forward(
                 output_attentions=output_attentions,
                 use_cache=use_cache,
                 cache_position=cache_position,
-                position_embeddings=position_embeddings,
             )
 
         hidden_states = layer_outputs[0]
