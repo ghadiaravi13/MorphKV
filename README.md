@@ -1,4 +1,4 @@
-# MorphKV
+# MorphKV: Dynamic Token Eviction for efficient KV cache management
 
 <p align="center">
   <img src="morphboy.png" width="300" height="300">
