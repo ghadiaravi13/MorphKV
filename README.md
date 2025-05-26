@@ -3,7 +3,7 @@
 <table>
   <tr>
     <td>
-      <img src="morphboy.png" width="150" height="150">
+      <img src="morphboy.png" width="300" height="300">
     </td>
     <td>
       <p><strong>MorphBoy</strong> is a compact token eviction module designed for efficient long-context LLM inference. It dynamically identifies and retains relevant tokens, improving throughput without sacrificing accuracy.</p>
