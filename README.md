@@ -13,7 +13,7 @@ Hence, it uses a two-fold approach: 1. retain all the recent window tokens in th
 **Paper Link: https://arxiv.org/pdf/2503.00979**
 
 <p align="center">
-  <img src="image.png" width="1200" height="200">
+  <img src="image.png" width="1000" height="200">
 </p>
 
 Unlike prior methods like SnapKV, MorphKV is a dynamic algorithm and performs eviction at every timestep, thereby maintaining a constant-sized KV cache throughout inference.
