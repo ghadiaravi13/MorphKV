@@ -20,5 +20,11 @@ Currently, MorphKV is thoroughly tested with transformers 4.45.0 and hence we re
 ```
 </pre>
 
-#### 2. 
+#### 2. Install morphkv
+
+<pre>
+  git clone https://github.com/ghadiaravi13/MorphKV/
+  cd MorphKV/
+  pip install .
+</pre>
 
