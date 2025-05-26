@@ -1,7 +1,7 @@
 # MorphKV: Dynamic Token eviction for efficient KV cache management 
 
 <p align="center">
-  <img src="morphboy.png" width="300" height="300">
+  <img src="Figs/morphboy.png" width="300" height="300">
 </p>
 
 ## [ICML'25] Dialogue Without Limits: Constant-Sized KV Caches for Extended Responses in LLMs
@@ -13,7 +13,7 @@ Hence, it uses a two-fold approach: 1. retain all the recent window tokens in th
 **Paper Link: https://arxiv.org/pdf/2503.00979**
 
 <p align="center">
-  <img src="image.png" width="800" height="200">
+  <img src="Figs/overview.png" width="800" height="200">
 </p>
 
 Unlike prior methods like SnapKV, MorphKV is a dynamic algorithm and performs eviction at every timestep, thereby maintaining a constant-sized KV cache throughout inference.
