@@ -87,6 +87,21 @@ Launching the inference on LongGenBench: The model generates response for the co
 
 We also evaluate MorphKV performance on LongBench, which is a long-context benchmark-suite with diverse benchmarks across retrieval, reasoning, and Question-Answering. The code present in this repository is derived from the original LongBench repository.
 
+### Performance
+
+| Model   | Variant        | 2wmqa    | drdr     | hpqa     | mnews    | mfqa\_en | mfqa\_zh | musq     | nqa      | pcnt     | prt      | qsp      | qms      | sams     | tqa      | vcs      |
+| ------- | -------------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- |
+| Llama   | SnapKV         | **16.0** | 22.0     | 14.9     | 25.6     | 25.4     | 18.7     | **10.7** | **32.2** | **7.6**  | **98.4** | 11.7     | 23.1     | **42.9** | **91.7** | 14.2     |
+|         | MorphKV (ours) | 14.9     | **22.5** | **15.9** | **26.6** | **25.7** | **19.9** | **10.7** | 31.9     | 7.5      | 97.8     | **11.9** | **23.6** | **42.9** | 91.5     | **15.2** |
+|         | Full Attention | 16.5     | 30.0     | 16.7     | 26.8     | 27.4     | 20.1     | 11.4     | 32.0     | 6.9      | 97.7     | 13.2     | 23.6     | 43.7     | 91.6     | 16.1     |
+| Mistral | SnapKV         | 26.6     | 23.7     | 40.5     | 26.0     | **48.8** | 41.3     | **18.3** | 25.6     | 2.5      | **88.6** | **31.0** | **23.8** | 41.9     | **86.3** | 13.5     |
+|         | MorphKV (ours) | **26.7** | **23.9** | **40.8** | **26.6** | 48.4     | **43.0** | 16.7     | **26.7** | **3.0**  | 85.9     | 30.9     | 23.6     | **42.3** | **86.3** | **13.7** |
+|         | Full Attention | 27.1     | 30.4     | 43.0     | 27.1     | 49.2     | 48.3     | 18.8     | 26.7     | 2.8      | 87.0     | 33.0     | 24.2     | 42.8     | 86.2     | 15.2     |
+| Phi-4   | SnapKV         | 22.3     | **24.2** | **19.5** | 25.0     | 38.0     | **47.2** | 5.2      | 20.5     | **12.6** | 63.9     | **32.4** | 22.1     | 47.2     | 90.5     | 11.4     |
+|         | MorphKV (ours) | **22.6** | 24.1     | 19.3     | **25.5** | **38.2** | 46.4     | **6.2**  | **21.0** | **12.6** | **64.3** | 31.2     | **22.4** | **47.6** | **90.6** | **12.3** |
+|         | Full Attention | 22.2     | 29.0     | 19.6     | 25.9     | 38.2     | 48.9     | 6.0      | 20.7     | 11.6     | 63.3     | 33.3     | 22.9     | 48.2     | 90.4     | 13.4     |
+
+
 ### Running LongBench
 
 <pre>
