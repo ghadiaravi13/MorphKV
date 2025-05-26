@@ -1,17 +1,8 @@
 # MorphKV
 
-<table>
-  <tr>
-    <td style="vertical-align: middle;">
-      <img src="morphboy.png" width="200" height="200">
-    </td>
-    <td style="vertical-align: middle; padding-left: 20px;">
-      <p style="font-size:16px; margin: 0;">
-        <strong>MorphBoy</strong> is a compact token eviction module for efficient long-context LLM inference. It retains only the most relevant tokens at each step, improving memory efficiency and throughput while maintaining strong accuracy.
-      </p>
-    </td>
-  </tr>
-</table>
+<p style="vertical-align: middle;">
+  <img src="morphboy.png" width="200" height="200">
+</p>
 
 ## [ICML 2025] Dialogue Without Limits: Constant-Sized KV Caches for Extended Responses in LLMs
 
