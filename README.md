@@ -8,7 +8,7 @@
 
 This repository contains the code for MorphKV, a dynamic KV cache compression technique that delivers massive memory savings compared to SOTA methods like SnapKV and $H_2O$,
 while also improving upon the benchmark accuracy scores. MorphKV uses a window of recent tokens to gather information about the importance of the distant context tokens.
-Hence, it uses a two-fold approach: 1. retain all the recent window tokens in the KV cache, and 2. Identify the top-K most important distant tokens and retain them in the KV cache. \
+Hence, it uses a two-fold approach: 1. retain all the recent window tokens in the KV cache, and 2. Identify the top-K most important distant tokens and retain them in the KV cache.
 
 Unlike prior methods like SnapKV, MorphKV is a dynamic algorithm and performs eviction at every timestep, thereby maintaining a constant-sized KV cache throughout inference.
 Further, MorphKV also accounts for GQA, thereby allowing better practical adoption, since many models today use GQA as an architecture choice.
