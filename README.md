@@ -1,7 +1,10 @@
 # MorphKV
 
-<p align="center">
+<p align="left">
   <img src="morphboy.png" width="300" height="300">
+</p>
+<p align="right">
+  <img src="morph_text.png" width="300" height="300">
 </p>
 
 ## [ICML 2025] Dialogue Without Limits: Constant-Sized KV Caches for Extended Responses in LLMs
