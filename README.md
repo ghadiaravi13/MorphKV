@@ -22,7 +22,7 @@ Further, MorphKV also accounts for GQA, thereby allowing better practical adopti
 
 ## MorphKV - Design
 <p align="center">
-  <img src="design_main.png" width="800" height="500">
+  <img src="design_main.png" width="800" height="400">
 </p>
 
 Fundamentally, MorphKV's design leverages two key aspects of LLM Inference: 1. retaining recent tokens for local coherence and, 2. Identifying important past tokens for distant relevance. In the example shown below, note how the relevant context dynamically shifts as token generation progresses.
