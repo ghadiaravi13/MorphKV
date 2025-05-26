@@ -50,7 +50,7 @@ Launching the inference on LongGenBench: The model generates response for the co
 
 ## [LongBench](https://github.com/THUDM/LongBench)
 
-We also evaluate MorphKV performance on LongBench, which is a long-context benchmark-suite with diverse benchmarks across retrieval, reasoning, and Question-Answering.
+We also evaluate MorphKV performance on LongBench, which is a long-context benchmark-suite with diverse benchmarks across retrieval, reasoning, and Question-Answering. The code present in this repository is derived from the original LongBench repository.
 
 ### Running LongBench
 
