@@ -16,8 +16,7 @@ MorphKV is integrated within the huggingface transformer library, and hence can 
 Currently, MorphKV is thoroughly tested with transformers 4.45.0 and hence we recommend maintaining this version of transformers for running MorphKV, particularly since the attention class has undergone major restructuring in the recent versions.
 
 <pre>
-```pip install transformers==4.45.0
-```
+  pip install transformers==4.45.0
 </pre>
 
 #### 2. Install morphkv
