@@ -1,6 +1,6 @@
 # MorphKV
 
-<p style="vertical-align: middle;">
+<p style="center">
   <img src="morphboy.png" width="200" height="200">
 </p>
 
