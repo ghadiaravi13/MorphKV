@@ -10,14 +10,15 @@ This repository contains the code for MorphKV, a dynamic KV cache compression te
 while also improving upon the benchmark accuracy scores. MorphKV uses a window of recent tokens to gather information about the importance of the distant context tokens.
 Hence, it uses a two-fold approach: 1. retain all the recent window tokens in the KV cache, and 2. Identify the top-K most important distant tokens and retain them in the KV cache.
 
-Unlike prior methods like SnapKV, MorphKV is a dynamic algorithm and performs eviction at every timestep, thereby maintaining a constant-sized KV cache throughout inference.
-Further, MorphKV also accounts for GQA, thereby allowing better practical adoption, since many models today use GQA as an architecture choice.
-
 **Paper Link: https://arxiv.org/pdf/2503.00979**
 
 <p align="center">
   <img src="image.png" width="1200" height="280">
 </p>
+
+Unlike prior methods like SnapKV, MorphKV is a dynamic algorithm and performs eviction at every timestep, thereby maintaining a constant-sized KV cache throughout inference.
+Further, MorphKV also accounts for GQA, thereby allowing better practical adoption, since many models today use GQA as an architecture choice.
+
 
 ### Usage
 MorphKV is integrated within the huggingface transformer library, and hence can be used via simple monkeypatching of a few transformer classes. 
