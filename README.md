@@ -15,6 +15,10 @@ Further, MorphKV also accounts for GQA, thereby allowing better practical adopti
 
 **Paper Link: https://arxiv.org/pdf/2503.00979**
 
+<p align="center">
+  <img src="kvcompressionmethods.pdf" width="900" height="300">
+</p>
+
 ### Usage
 MorphKV is integrated within the huggingface transformer library, and hence can be used via simple monkeypatching of a few transformer classes. 
 
