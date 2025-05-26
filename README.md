@@ -11,8 +11,6 @@ while also improving upon the benchmark accuracy scores.
 
 **Paper Link: https://arxiv.org/pdf/2503.00979**
 
-**ICML webpage: https://icml.cc/virtual/2025/poster/45197**
-
 ### Usage
 MorphKV is integrated within the huggingface transformer library, and hence can be used via simple monkeypatching of a few transformer classes. 
 
