@@ -2,7 +2,6 @@ import json
 import random
 import time
 import requests
-import multiprocessing
 from tqdm import tqdm
 import re
 import argparse
@@ -14,15 +13,10 @@ def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=None, choices=["phi4-unsloth", "phi4", "mistral","qwen2.5","llama3.1-8b-instruct","llama2-7b-chat-4k", "llama-2-7B-32k-instruct", "longchat-v1.5-7b-32k", "xgen-7b-8k", "internlm-7b-8k", "chatglm2-6b", "chatglm2-6b-32k", "chatglm3-6b-32k", "vicuna-v1.5-7b-16k"])
     parser.add_argument('--dataset', type=str, default=None)
-    parser.add_argument('--hopf_type', type=str, default="max_fused")
+    parser.add_argument('--morph_type', type=str, default="max_fused")
     parser.add_argument('--len', "-l", type=int, default=None)
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
-    parser.add_argument("--window_size", "-ws", type=int, default=3, help="Window size for HopFormer")
-    parser.add_argument("--sim_threshold", "-st", type=float, default=20.0, help="Similarity threshold for HopFormer")
-    parser.add_argument("--num_attn_sinks", "-snks", type=float, default=0, help="Attention sinks (streaming LLM)")
-    parser.add_argument("--gumbel", "-gbl", action='store_true', help="use gumbel softmax")
-    parser.add_argument("--no_hopf", action='store_true', help="Disable HopFormer")  # Updated line
-    parser.add_argument("--save_wts", action='store_true', help="Save attn wts")  # Updated line
+    parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
     return parser.parse_args(args)
 
 dims = ["Relevance", "Accuracy", "Coherence", "Clarity", "Breadth and Depth", "Reading Experience"]
@@ -32,14 +26,14 @@ model_name = args.model
 
 prompt_template = open("judge.txt", "r", encoding="utf-8").read()
 
-gpt_api_key = open("/work/10198/ghadiaravi13/vista/HopFormer/open_ai_api.txt","r").readlines()[0]
+gpt_api_key = GPT4_API_KEY
 model_keys = {"gpt-4o-2024-05-13":gpt_api_key,
-              "mistral-large-latest": "Mue2YhdKumdycUEzCQjeiVPzOJD0FEPN"}
+              "mistral-large-latest": "MISTRAL_API_KEY"}
 model_link = {"gpt-4o-2024-05-13": "https://api.openai.com/v1/chat/completions",
               "mistral-large-latest": "https://api.mistral.ai/v1/chat/completions"}
 
-GPT_MODEL = 'mistral-large-latest'#"gpt-4o-2024-05-13"#
-GPT4_API_KEY = model_keys[GPT_MODEL]#'Mue2YhdKumdycUEzCQjeiVPzOJD0FEPN' # Your API Key
+GPT_MODEL = 'mistral-large-latest'
+GPT4_API_KEY = model_keys[GPT_MODEL]
 
 def get_response_gpt4(prompt, temperature=0.5, max_new_tokens=1024, stop=None):
     tries = 0
