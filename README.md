@@ -25,7 +25,7 @@ Further, MorphKV also accounts for GQA, thereby allowing better practical adopti
   <img src="design_main.png" width="800" height="400">
 </p>
 
-Fundamentally, MorphKV's design leverages two key aspects of LLM Inference: 1. retaining recent tokens for local coherence and, 2. Identifying important past tokens for distant relevance. In the example shown below, note how the relevant context dynamically shifts as token generation progresses.
+Fundamentally, MorphKV's design leverages two key aspects of LLM Inference: 1. retaining recent tokens for local coherence and, 2. Identifying important past tokens for distant relevance. In the example shown above, note how the relevant context dynamically shifts as token generation progresses.
 By leveraging this behaviour, MorphKV allows to retain a very lightweight KV cache comprising of only the relevant information, massively reducing the memory overhead, thereby improving system-throughput.
 
 ### Usage
