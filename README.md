@@ -27,3 +27,24 @@ Currently, MorphKV is thoroughly tested with transformers 4.45.0 and hence we re
   pip install .
 </pre>
 
+# Benchmarks
+
+## LongGenBench
+
+We test the effectiveness of MorphKV on long-response generation task: LongGenBench. The code present here is derived from the original LongGenBench repository (https://github.com/mozhu621/LongGenBench/).
+
+
+### Running LongGenBench
+
+Launching the inference on LongGenBench: The model generates response for the corresponding LongGenBench tasks such as writing a floor-plan, diary etc. and gets saved to the JSON file. Subsequently, the JSON file is used to perform eval.
+
+<pre>
+  cd LongGenBench
+  python inference_hf.py --model mistral -ws 200 -mc 4000 --morph_type max_fused --input_file ../Dataset/Dataset_short.json --preds_path preds --output_file preds/Mistral.json
+</pre>
+
+### Evaluating LongGenBench
+<pre>
+  python eval.py --data preds/Mistral.json --csv preds/lgb_eval.csv
+</pre>
+
