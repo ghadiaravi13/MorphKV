@@ -29,9 +29,9 @@ Currently, MorphKV is thoroughly tested with transformers 4.45.0 and hence we re
 
 # Benchmarks
 
-## LongGenBench
+## [LongGenBench](https://github.com/mozhu621/LongGenBench/)
 
-We test the effectiveness of MorphKV on long-response generation task: LongGenBench. The code present here is derived from the original LongGenBench repository (https://github.com/mozhu621/LongGenBench/).
+We test the effectiveness of MorphKV on long-response generation task: LongGenBench. The code present here is derived from the original LongGenBench repository.
 
 
 ### Running LongGenBench
@@ -46,5 +46,20 @@ Launching the inference on LongGenBench: The model generates response for the co
 ### Evaluating LongGenBench
 <pre>
   python eval.py --data preds/Mistral.json --csv preds/lgb_eval.csv
+</pre>
+
+## [LongBench](https://github.com/THUDM/LongBench)
+
+We also evaluate MorphKV performance on LongBench, which is a long-context benchmark-suite with diverse benchmarks across retrieval, reasoning, and Question-Answering.
+
+### Running LongBench
+
+<pre>
+  python pred_single.py --model mistral -ws 32 -mc 2000 --morph_type sum_fused --pred_path preds
+</pre>
+
+### Evaluating LongBench
+<pre>
+  python eval.py --model mistral --pred_path preds
 </pre>
 
