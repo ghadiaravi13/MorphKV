@@ -17,6 +17,7 @@ def parse_args(args=None):
     parser.add_argument('--len', "-l", type=int, default=None)
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
     parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
+    parser.add_argument("--pred_path", type=str, default="pred")
     return parser.parse_args(args)
 
 dims = ["Relevance", "Accuracy", "Coherence", "Clarity", "Breadth and Depth", "Reading Experience"]
@@ -26,7 +27,7 @@ model_name = args.model
 
 prompt_template = open("judge.txt", "r", encoding="utf-8").read()
 
-gpt_api_key = GPT4_API_KEY
+gpt_api_key = "GPT4_API_KEY"
 model_keys = {"gpt-4o-2024-05-13":gpt_api_key,
               "mistral-large-latest": "MISTRAL_API_KEY"}
 model_link = {"gpt-4o-2024-05-13": "https://api.openai.com/v1/chat/completions",
@@ -115,7 +116,7 @@ def process_data(items, fout):
             fout.write(json.dumps(item, ensure_ascii=False)+'\n')
             fout.flush()
 
-res_path = f"preds/{model_name}/"
+res_path = f"{args.pred_path}/{model_name}/"
 result = dict()
 score_df = dict()
 score_df['resp_len'] = []
@@ -175,9 +176,9 @@ for file in os.listdir(res_path):
     total_score['total'] = sum(total_score.values()) / len(total_score)
     result[file[:-6]] = total_score
 
-json.dump(result, open(f"preds/{model_name}/judge_result.json","w"), ensure_ascii=False, indent=4)
+json.dump(result, open(f"{args.pred_path}/{model_name}/judge_result.json","w"), ensure_ascii=False, indent=4)
 
-pd.DataFrame(result).transpose().to_csv(f"preds/{model_name}/judge_result.csv")
+pd.DataFrame(result).transpose().to_csv(f"{args.pred_path}/{model_name}/judge_result.csv")
 
 score_df = pd.DataFrame(score_df)
 score_df['total'] = score_df[dims].sum(axis=1)/len(dims)
@@ -187,7 +188,7 @@ for dim in dims:
     fig.update_layout(barmode='overlay')
     # Reduce opacity to see both histograms
     fig.update_traces(opacity=0.75)
-    fig.write_html(f"preds/{model_name}/judge_scores_hist_{dim}.html")
+    fig.write_html(f"{args.pred_path}/{model_name}/judge_scores_hist_{dim}.html")
 
 try:
     with pd.ExcelWriter(f"preds/LW_score_data.xlsx",mode='a',if_sheet_exists='replace') as writer:

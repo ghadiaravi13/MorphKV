@@ -17,6 +17,7 @@ setup(
         "torch>=2.0.0",
         "transformers==4.45.0",
         "numpy",
+        "plotly",
     ],
     extras_require={
         "flash": [

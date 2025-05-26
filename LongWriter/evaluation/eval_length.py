@@ -15,20 +15,16 @@ def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=None, choices=["phi4-unsloth", "phi4", "mistral","qwen2.5","llama3.1-8b-instruct","llama2-7b-chat-4k", "llama-2-7B-32k-instruct", "longchat-v1.5-7b-32k", "xgen-7b-8k", "internlm-7b-8k", "chatglm2-6b", "chatglm2-6b-32k", "chatglm3-6b-32k", "vicuna-v1.5-7b-16k"])
     parser.add_argument('--dataset', type=str, default=None)
-    parser.add_argument('--hopf_type', type=str, default="max_fused")
+    parser.add_argument('--morph_type', type=str, default="max_fused")
     parser.add_argument('--len', "-l", type=int, default=None)
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
-    parser.add_argument("--window_size", "-ws", type=int, default=3, help="Window size for HopFormer")
-    parser.add_argument("--sim_threshold", "-st", type=float, default=20.0, help="Similarity threshold for HopFormer")
-    parser.add_argument("--num_attn_sinks", "-snks", type=float, default=0, help="Attention sinks (streaming LLM)")
-    parser.add_argument("--gumbel", "-gbl", action='store_true', help="use gumbel softmax")
-    parser.add_argument("--no_hopf", action='store_true', help="Disable HopFormer")  # Updated line
-    parser.add_argument("--save_wts", action='store_true', help="Save attn wts")  # Updated line
+    parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
+    parser.add_argument("--pred_path", type=str, default="pred")
     return parser.parse_args(args)
 
 args = parse_args()
 model_name = args.model
-res_path = f"preds/{model_name}/"
+res_path = f"{args.pred_path}/{model_name}/"
 result = {}
 for file in os.listdir(res_path):
     if "json" not in file or "result" in file or "judge" in file or "profile" in file or "log" in file:
@@ -66,5 +62,5 @@ for file in os.listdir(res_path):
     plt.xticks(fontsize=24)
     plt.yticks(fontsize=24)
     plt.tight_layout()
-    plt.savefig(f'preds/{model_name}/{".".join(file.split(".")[:-1])}_scatter.png')
-json.dump(result, open(f"preds/{model_name}/result.json","w"), ensure_ascii=False, indent=4)
+    plt.savefig(f'{args.pred_path}/{model_name}/{".".join(file.split(".")[:-1])}_scatter.png')
+json.dump(result, open(f"{args.pred_path}/{model_name}/result.json","w"), ensure_ascii=False, indent=4)
