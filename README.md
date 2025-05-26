@@ -1,10 +1,11 @@
-# MorphKV: Dynamic Token Eviction for efficient KV cache management
+## [ICML'25] Dialogue Without Limits: Constant-Sized KV Caches for Extended Responses in LLMs a.k.a
+# MorphKV
 
 <p align="center">
   <img src="morphboy.png" width="300" height="300">
 </p>
 
-## [ICML'25] Dialogue Without Limits: Constant-Sized KV Caches for Extended Responses in LLMs
+
 
 This repository contains the code for MorphKV, a dynamic KV cache compression technique that delivers massive memory savings compared to SOTA methods like SnapKV and $H_2O$,
 while also improving upon the benchmark accuracy scores. MorphKV uses a window of recent tokens to gather information about the importance of the distant context tokens.
