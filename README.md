@@ -54,19 +54,20 @@ We test the effectiveness of MorphKV on long-response generation task: LongGenBe
 
 ### Performance
 
+
 **Note:** MorphKV achieves better scores across almost all evaluation metrics — Completion Rate (CR), Accuracy Once, Accuracy Range, Accuracy Periodic, and Accuracy Average.
 
-| Model    | Variant     | CR (%) | Accuracy Once (%) | Range (%) | Periodic (%) | Avg. (%) |
-|----------|-------------|--------|--------------------|-----------|---------------|----------|
-| **Llama**   | H2O         | 64     | 45                 | 60        | **27**        | 44       |
-|          | SnapKV      | 64     | 50                 | 55        | 26            | 44       |
-|          | **MorphKV** | **64** | **50**             | **61**    | 24            | **45**   |
-| **Mistral** | H2O         | 71.2   | 57                 | 60        | 32            | 50       |
-|          | SnapKV      | 71     | 55                 | 57        | 36            | 49       |
-|          | **MorphKV** | **71.2**| **57**            | **62**    | **36**        | **52**   |
-| **Qwen**    | H2O         | **55** | **46**             | 51        | 28            | 42       |
-|          | SnapKV      | 53     | 44                 | 46        | 28            | 39       |
-|          | **MorphKV** | 51     | 43                 | **68**    | **30**        | **47**   |
+| Model Group | Variant     | CR (%) | Once (%) | Range (%) | Periodic (%) | Avg. (%) |
+|-------------|-------------|--------|----------|------------|----------------|-----------|
+| **Llama**   | H2O         | 64     | 45       | 60         | **27**         | 44        |
+|             | SnapKV      | 64     | 50       | 55         | 26             | 44        |
+|             | **MorphKV** | **64** | **50**   | **61**     | 24             | **45**    |
+| **Mistral** | H2O         | 71.2   | 57       | 60         | 32             | 50        |
+|             | SnapKV      | 71     | 55       | 57         | 36             | 49        |
+|             | **MorphKV** | **71.2**| **57**   | **62**     | **36**         | **52**    |
+| **Qwen**    | H2O         | **55** | **46**   | 51         | 28             | 42        |
+|             | SnapKV      | 53     | 44       | 46         | 28             | 39        |
+|             | **MorphKV** | 51     | 43       | **68**     | **30**         | **47**    |
 
 ### Running LongGenBench
 
