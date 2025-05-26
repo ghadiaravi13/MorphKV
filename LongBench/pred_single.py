@@ -5,12 +5,9 @@ import json
 import transformers
 from transformers import AutoTokenizer, LlamaTokenizer, LlamaForCausalLM, AutoModelForCausalLM, AutoConfig
 
-import sys
-sys.path.append("/home/rhg659/MorphKV/")
-
-from morphkv.monkeypatch import patch_mistral
+from morphkv.monkeypatch import patch_morphkv
 print("Applying MorphKV patches...")
-patch_mistral()
+patch_morphkv()
 print("MorphKV patches applied successfully!")
 
 from tqdm import tqdm
