@@ -16,7 +16,7 @@ Further, MorphKV also accounts for GQA, thereby allowing better practical adopti
 **Paper Link: https://arxiv.org/pdf/2503.00979**
 
 <p align="center">
-  <img src="image.png" width="900" height="300">
+  <img src="image.png" width="1200" height="300">
 </p>
 
 ### Usage
