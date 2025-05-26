@@ -45,66 +45,15 @@ def patch_mistral():
     transformers.generation.utils.DynamicCache = MorphOffloadedCache
     
     # Verify the patching worked
-    print("✓ MistralAttention patched to:", transformers.models.mistral.modeling_mistral.MistralAttention.__name__)
-    print("✓ MistralFlashAttention2 patched to:", transformers.models.mistral.modeling_mistral.MistralFlashAttention2.__name__)
-    print("✓ DynamicCache patched to:", transformers.cache_utils.DynamicCache.__name__)
-    print("✓ GenerationMixin patched to:", transformers.generation.utils.GenerationMixin.__name__)
-    print("✓ _get_cache method patched to always return MorphOffloadedCache")
-    print("✓ MISTRAL_ATTENTION_CLASSES updated:")
+    print("MistralAttention patched to:", transformers.models.mistral.modeling_mistral.MistralAttention.__name__)
+    print("MistralFlashAttention2 patched to:", transformers.models.mistral.modeling_mistral.MistralFlashAttention2.__name__)
+    print("DynamicCache patched to:", transformers.cache_utils.DynamicCache.__name__)
+    print("GenerationMixin patched to:", transformers.generation.utils.GenerationMixin.__name__)
+    print("_get_cache method patched to always return MorphOffloadedCache")
+    print("MISTRAL_ATTENTION_CLASSES updated:")
     for key, cls in transformers.models.mistral.modeling_mistral.MISTRAL_ATTENTION_CLASSES.items():
         print(f"  {key}: {cls.__name__}")
-    print("✓ NEED_SETUP_CACHE_CLASSES_MAPPING updated:")
+    print("NEED_SETUP_CACHE_CLASSES_MAPPING updated:")
     for key, cls in NEED_SETUP_CACHE_CLASSES_MAPPING.items():
         print(f"  {key}: {cls.__name__}")
-    print("✓ ALL_CACHE_IMPLEMENTATIONS updated:", config_utils.ALL_CACHE_IMPLEMENTATIONS)
-
-# import transformers
-# from transformers import AutoTokenizer, LlamaTokenizer, LlamaForCausalLM, AutoModelForCausalLM, AutoConfig
-# from transformers.models.mistral.modeling_mistral import MistralForCausalLM
-
-
-
-# from morphkv.models.patch_mistral import MistralAttentionMorph, MistralFlashAttention2Morph
-# from morphkv.morph_cache import OffloadedCache
-# from morphkv.gen_utils import GenerationMixin
-
-# def patch_mistral():
-#     # Patch the classes BEFORE model initialization
-#     transformers.models.llama.modeling_llama.LlamaAttention = MistralAttentionMorph
-#     transformers.models.llama.modeling_llama.LlamaFlashAttention2 = MistralFlashAttention2Morph
-    
-#     # Also patch the modeling_mistral module itself to ensure imports work correctly
-#     # transformers.models.mistral.modeling_mistral.MistralModel._keys_to_ignore_on_load_unexpected = []
-    
-#     # Now load the model with the patched classes
-#     # from transformers import AutoModelForCausalLM, AutoConfig
-#     model_path = "meta-llama/Llama-3.1-8B-Instruct"
-#     config = AutoConfig.from_pretrained(
-#         model_path,
-#         cache_dir="/home/shared/model_chkpts/"
-#     )
-#     config._attn_implementation = "eager" #"flash_attention_2"
-
-#     config.morphkv = "Yes"
-    
-#     # Force a reload of modules if necessary
-#     # import importlib
-#     # importlib.reload(transformers.models.mistral.modeling_mistral)
-    
-#     # model = AutoModelForCausalLM.from_pretrained(
-#     #     "mistralai/Mistral-7B-Instruct-v0.2",
-#     #     config=config,
-#     #     cache_dir="/home/shared/model_chkpts/"
-#     # )
-#     model = MistralForCausalLM.from_pretrained(
-#         model_path,
-#         config=config,
-#         cache_dir="/home/shared/model_chkpts/"
-#     )
-    
-#     # # Verify all layers have the patched attention
-#     # for i, layer in enumerate(model.model.layers):
-#     #     assert isinstance(layer.self_attn, MistralFlashAttention2Morph), f"Layer {i} has wrong attention: {layer.self_attn.__class__.__name__}"
-#     import pdb; pdb.set_trace()
-    
-#     return model
+    print("ALL_CACHE_IMPLEMENTATIONS updated:", config_utils.ALL_CACHE_IMPLEMENTATIONS)

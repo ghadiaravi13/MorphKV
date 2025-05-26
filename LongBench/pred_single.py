@@ -5,12 +5,9 @@ import json
 import transformers
 from transformers import AutoTokenizer, LlamaTokenizer, LlamaForCausalLM, AutoModelForCausalLM, AutoConfig
 
-# CRITICAL: Apply monkey patches immediately after transformers import
-# but before any model operations
 import sys
 sys.path.append("/home/rhg659/MorphKV/")
 
-# Import the patching function and apply it immediately
 from morphkv.monkeypatch import patch_mistral
 print("Applying MorphKV patches...")
 patch_mistral()
@@ -21,14 +18,9 @@ import numpy as np
 import random
 import argparse
 import warnings
-# from llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.profiler
-
-# Import MorphKV components (these are now available after patching)
-from morphkv.models.patch_mistral import MistralAttentionMorph, MistralFlashAttention2Morph
-# from morphkv.gen_utils import GenerationMixin
 
 import logging
 import logging.handlers
@@ -214,7 +206,7 @@ def load_model_and_tokenizer(path, model_name, device, args):
             if version in transformers_version:
                 warning_flag = False
                 break
-        assert warning_flag==False, f"Transformers version {transformers_version} is not be compatible with MorphKV. MorphKV is tested with Transformers version {version_list}. Please install this by: pip install transformers==4.45.0"
+        assert warning_flag==False, f"Transformers version {transformers_version} is not compatible with MorphKV. MorphKV is tested with Transformers version {version_list}. Please install this by: pip install transformers==4.45.0"
         cache_dir = "/home/shared/model_chkpts/"
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -244,13 +236,6 @@ def load_model_and_tokenizer(path, model_name, device, args):
         assert False, "Models unsupported\n"
     model = model.eval()
     
-    # Verify the loaded model uses the correct classes
-    print("Verifying that MorphKV classes are being used:")
-    for name, module in model.named_modules():
-        if isinstance(module, transformers.models.mistral.modeling_mistral.MistralAttention) or \
-        isinstance(module, transformers.models.mistral.modeling_mistral.MistralFlashAttention2):
-            print(f"Module {name} is of type: {type(module).__name__}")
-            break  # Just show the first one to confirm it's working
     return model, tokenizer
 
 if __name__ == '__main__':
