@@ -15,8 +15,6 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
 )
 from transformers.utils import (
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
     is_flash_attn_2_available,
     is_flash_attn_greater_or_equal_2_10,
     logging,
@@ -24,14 +22,8 @@ from transformers.utils import (
 from transformers.models.mistral.configuration_mistral import MistralConfig
 from morphkv.morph_cache import MorphOffloadedCache
 
-# Try to import flash attention, but handle broken installations gracefully
-_flash_attention_forward = None
 if is_flash_attn_2_available():
-    try:
-        from transformers.modeling_flash_attention_utils import _flash_attention_forward
-    except ImportError:
-        # Flash attention is available but broken, disable it
-        _flash_attention_forward = None
+    from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
 logger = logging.get_logger(__name__)
 
