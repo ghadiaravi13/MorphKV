@@ -20,6 +20,14 @@ Unlike prior methods like SnapKV, MorphKV is a dynamic algorithm and performs ev
 Further, MorphKV also accounts for GQA, thereby allowing better practical adoption, since many models today use GQA as an architecture choice.
 
 
+## MorphKV - Design
+<p align="center">
+  <img src="design_main.png" width="800" height="500">
+</p>
+
+Fundamentally, MorphKV's design leverages two key aspects of LLM Inference: 1. retaining recent tokens for local coherence and, 2. Identifying important past tokens for distant relevance. In the example shown below, note how the relevant context dynamically shifts as token generation progresses.
+By leveraging this behaviour, MorphKV allows to retain a very lightweight KV cache comprising of only the relevant information, massively reducing the memory overhead, thereby improving system-throughput.
+
 ### Usage
 MorphKV is integrated within the huggingface transformer library, and hence can be used via simple monkeypatching of a few transformer classes. 
 
