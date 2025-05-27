@@ -6,7 +6,7 @@
 
 ## [ICML'25] Dialogue Without Limits: Constant-Sized KV Caches for Extended Responses in LLMs
 
-This repository contains the code for MorphKV, a dynamic KV cache compression technique that maintains a constant-sized KV cache while preserving contextual coherence. MorphKV iteratively refines the KV cache via lightweight updates guided by the attention patterns of recently generated tokens. This approach captures inter-token correlation with greater accuracy, enabling MorphKV to identify, and retain only the most relevant older tokens. Our studies on long-response tasks show upto 52.9% memory savings and 18.2% higher accuracy as compared to state-of-the-art prior works such as SnapKV, and H$_2$O, enabling efficient real-world deployment.
+This repository contains the code for MorphKV, a dynamic KV cache compression technique that maintains a constant-sized KV cache while preserving contextual coherence. MorphKV iteratively refines the KV cache via lightweight updates guided by the attention patterns of recently generated tokens. This approach captures inter-token correlation with greater accuracy, enabling MorphKV to identify, and retain only the most relevant older tokens. Our studies on long-response tasks show upto 52.9% memory savings and 18.2% higher accuracy as compared to state-of-the-art prior works such as SnapKV, and $H_2O$, enabling efficient real-world deployment.
 
 **Arxiv Pre-print: https://arxiv.org/pdf/2503.00979**
 
@@ -25,7 +25,7 @@ Unlike prior works such as SnapKV which prune the KV cache only at the beginning
 Fundamentally, MorphKV's design leverages two key aspects: 1. Retaining recent tokens for local coherence and, 2. Identifying important older tokens for distant relevance using the attention pattern of recent tokens. In the above shown example, note how the relevant context dynamically shifts as token generation progresses. By leveraging these design principles, MorphKV maintains a lightweight KV cache storing only the most relevant tokens. This leads to a substantial decrease in memory usage, enabling the system to handle more requests simultaneously, thereby improving overall system-throughput.
 
 ### Usage
-MorphKV is integrated within the huggingface transformer library, and therefore can be used via simple monkeypatching of a few transformer classes. 
+MorphKV is integrated within the huggingface transformer library, allowing it to be used through simple monkeypatching of a few transformer classes. 
 
 #### 1. Pre-Requisites
 Currently, MorphKV is thoroughly tested with transformers 4.45.0 and hence we recommend maintaining this version of transformers for running MorphKV, particularly since the attention class has undergone major restructuring in the recent versions.
