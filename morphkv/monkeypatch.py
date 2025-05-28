@@ -5,7 +5,7 @@ import transformers.generation.configuration_utils as config_utils
 
 from morphkv.models.patch_mistral import MistralAttentionMorph, MistralFlashAttention2Morph, mistral_model_forward
 from morphkv.models.patch_llama import LlamaAttentionMorph, LlamaFlashAttention2Morph, llama_model_forward
-from morphkv.models.patch_qwen import Qwen2AttentionMorph, Qwen2FlashAttention2Morph, qwen2_model_forward
+from morphkv.models.patch_qwen2 import Qwen2AttentionMorph, Qwen2FlashAttention2Morph, qwen2_model_forward
 from morphkv.models.patch_phi3 import Phi3AttentionMorph, Phi3FlashAttention2Morph, phi3_model_forward
 
 from morphkv.morph_cache import MorphOffloadedCache
