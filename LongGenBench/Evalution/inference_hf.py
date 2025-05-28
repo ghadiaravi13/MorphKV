@@ -12,9 +12,9 @@ from tqdm import tqdm
 import sys
 sys.path.append("/home/rhg659/MorphKV")
 
-from morphkv.monkeypatch import patch_mistral
+from morphkv.monkeypatch import patch_morphkv
 print("Applying MorphKV patches...")
-patch_mistral()
+patch_morphkv()
 print("MorphKV patches applied successfully!")
 
 os.environ['HF_HOME'] = "/home/shared/model_chkpts/"
