@@ -70,7 +70,7 @@ We test the effectiveness of MorphKV on long-response generation task: LongGenBe
 Launching the inference on LongGenBench: The model generates response for the corresponding LongGenBench tasks such as writing a floor-plan, diary etc. and gets saved to the JSON file. Subsequently, the JSON file is used to perform eval.
 
 <pre>
-  cd LongGenBench
+  cd LongGenBench/Evalution
   python inference_hf.py --model mistral -ws 200 -mc 4000 --morph_type max_fused --input_file ../Dataset/Dataset_short.json --preds_path preds --output_file preds/Mistral.json
 </pre>
 
