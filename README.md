@@ -89,7 +89,7 @@ Average LLM Judge scores across different methods and models on LongWriter bench
 
 | Model         | Llama | Mistral | Phi4 | Qwen |
 |---------------|:-----:|:-------:|:----:|:----:|
-| ho            | 68.5  | 80.0    | 61.5 | 63.8 |
+| H2O           | 68.5  | 80.0    | 61.5 | 63.8 |
 | SnapKV        | 67.7  | 81.1    | 63.8 | **68.4** |
 | MorphKV       | **69.5** | **81.1** | **64.7** | 64.9 |
 | Full-Attention| 66.5  | 81.3    | 62.9 | 66.2 |
