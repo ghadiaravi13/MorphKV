@@ -79,6 +79,39 @@ Launching the inference on LongGenBench: The model generates response for the co
   python eval.py --data preds/Mistral.json --csv preds/lgb_eval.csv
 </pre>
 
+## [LongWriter](https://github.com/THUDM/LongWriter)
+
+For another long-response benchmark, we use LongWriter, which has more open-ended response generation tasks, like writing a 1000 word essay on a given topic etc. The code present in this repository is derived from the original LongWriter repository.
+
+### Performance
+
+Average LLM Judge scores across different methods and models on LongWriter benchmark
+
+| Model         | Llama | Mistral | Phi4 | Qwen |
+|---------------|:-----:|:-------:|:----:|:----:|
+| ho            | 68.5  | 80.0    | 61.5 | 63.8 |
+| SnapKV        | 67.7  | 81.1    | 63.8 | **68.4** |
+| MorphKV       | **69.5** | **81.1** | **64.7** | 64.9 |
+| Full-Attention| 66.5  | 81.3    | 62.9 | 66.2 |
+
+### Running LongWriter
+<pre>
+  python pred.py --model mistral -ws 30 -mc 600 --morph_type sum_fused --pred_path preds
+</pre>
+
+### Evaluating LongWriter:
+
+For LongWriter, there are two evaluation methods: length and quality. 
+Length measures how well the model was able to follow the prompt in terms of meeting the length requirement. 
+<pre>
+  python eval_length.py --model mistral --pred_path preds
+</pre>
+
+Quality measures the response quality across several metrics as per the original LongWriter benchmark, which uses LLM as a judge to estimate the quality of the responses. For our evaluation, we use a Mistral-Large-123B as the judge model. This script also support OpenAI APIs, so user may choose any other model which supports this API format.
+<pre>
+  python eval_quality.py --model mistral --pred_path preds
+</pre>
+
 ## [LongBench](https://github.com/THUDM/LongBench)
 
 We also evaluate MorphKV performance on LongBench, which is a long-context benchmark-suite with diverse benchmarks across retrieval, reasoning, and Question-Answering. The code present in this repository is derived from the original LongBench repository.
