@@ -14,11 +14,6 @@ def score(x, y):
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=None, choices=["phi4-unsloth", "phi4", "mistral","qwen2.5","llama3.1-8b-instruct","llama2-7b-chat-4k", "llama-2-7B-32k-instruct", "longchat-v1.5-7b-32k", "xgen-7b-8k", "internlm-7b-8k", "chatglm2-6b", "chatglm2-6b-32k", "chatglm3-6b-32k", "vicuna-v1.5-7b-16k"])
-    parser.add_argument('--dataset', type=str, default=None)
-    parser.add_argument('--morph_type', type=str, default="max_fused")
-    parser.add_argument('--len', "-l", type=int, default=None)
-    parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
-    parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
     parser.add_argument("--pred_path", type=str, default="pred")
     return parser.parse_args(args)
 
