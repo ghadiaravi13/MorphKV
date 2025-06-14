@@ -25,6 +25,7 @@ from transformers.utils import (
 )
 from transformers.models.phi3.configuration_phi3 import Phi3Config
 from morphkv.morph_cache import MorphOffloadedCache
+from morphkv.models.snapkv_utils import init_snapkv
 
 # Try to import flash attention, but handle broken installations gracefully
 _flash_attention_forward = None
@@ -178,15 +179,20 @@ class Phi3AttentionMorph(nn.Module):
     
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
         
+        if "h2o" in self.morph_type:
+            soft_scores = nn.functional.softmax(scores,dim=-1)
+            soft_scores[:,:,:,:past_key_value.attn_cache[self.layer_idx].shape[-1]] += past_key_value.attn_cache[self.layer_idx]
+            past_key_value.attn_cache[self.layer_idx] = soft_scores
+
         softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
         if(key_heads!=query_heads):
             #For GQA, we reduce scores by summing over grouped heads -> changed to taking max over grouped heads
             if "max" in self.morph_type or self.morph_type=='max_fused': 
                 sim_tokens = torch.full_like(scores[:,:key_heads,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).sum(dim=2)[0].max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
             elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
                 sim_tokens = torch.full_like(scores[:,:key_heads,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).sum(dim=2)[0].sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
             init_mask_kv[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
             
 
@@ -196,7 +202,9 @@ class Phi3AttentionMorph(nn.Module):
         elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
             sim_tokens = torch.full_like(scores[:,:,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
             init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        
+        if "h2o" in self.morph_type: 
+            sim_tokens = torch.full_like(scores[:,:,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(soft_scores[:, :, :, :-(self.WIN_SIZE+1)], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
         init_mask_attn[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
         
         if(key_heads!=query_heads):
@@ -250,7 +258,13 @@ class Phi3AttentionMorph(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
+            # sin and cos are specific to RoPE models; cache_position needed for the static cache
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            if self.config.morphkv and ("snapkv" in self.morph_type or "h2o" in self.morph_type):
+                key_states = repeat_kv(key_states, self.num_key_value_groups)
+                value_states = repeat_kv(value_states, self.num_key_value_groups)
+                query_heads = query_states.shape[1]
+                key_heads = key_states.shape[1]
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
@@ -258,7 +272,7 @@ class Phi3AttentionMorph(nn.Module):
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
         
-        if self.config.morphkv: # cache queries for MorphKV
+        if self.config.morphkv and not ("snapkv" in self.morph_type or "h2o" in self.morph_type): # cache queries for MorphKV
             query_states = past_key_value.update_win_queries(query_states[:,:,-self.WIN_SIZE:,:],self.layer_idx)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         
@@ -333,6 +347,9 @@ class Phi3FlashAttention2Morph(Phi3AttentionMorph):
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         # Phi3FlashAttention2 attention does not support output_attentions
+        if self.config.morphkv and "snapkv" in self.morph_type:
+            init_snapkv(self)
+            
         if hidden_states.shape[1]==1 and self.config.morphkv and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY:
             # logger.warning_once(
             #     "MistralModel was using MistralFlashAttention2 for prefilling, which does not support MorphKV eviction. Falling back to the eager attention implementation.\n\n"
@@ -415,7 +432,17 @@ class Phi3FlashAttention2Morph(Phi3AttentionMorph):
                     attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
 
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            if self.config.morphkv and "snapkv" in self.morph_type:
+                if hidden_states.shape[1]!=1:
+                    key_states = repeat_kv(key_states, self.num_key_value_groups)
+                    value_states = repeat_kv(value_states, self.num_key_value_groups)
+                    key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)
+                    past_key_value.update(key_states_compress, value_states_compress, self.layer_idx, None, cache_kwargs)
+            else:
+                if "h2o" in self.morph_type:
+                    key_states = repeat_kv(key_states, self.num_key_value_groups)
+                    value_states = repeat_kv(value_states, self.num_key_value_groups)
+                key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
         if key_states.shape[1]<query_states.shape[1]:
@@ -470,7 +497,19 @@ class Phi3FlashAttention2Morph(Phi3AttentionMorph):
         # cache win queries after attn output
         query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-self.WIN_SIZE:,:],self.layer_idx)
 
-        past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
+        if self.config.morphkv and "h2o" in self.morph_type and self.layer_idx>-1 and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY:
+                key_states = key_states.transpose(1, 2)
+                attn_weights = nn.functional.softmax(torch.matmul(query_states[:,:,-self.MAX_CAPACITY:,:], key_states.transpose(2, 3)) / math.sqrt(self.head_dim),dim=-1)
+                attn_weights = torch.tril(attn_weights,diagonal=max(attn_weights.shape[-1]-(self.MAX_CAPACITY),0))
+                attn_weights = attn_weights.sum(dim=2, keepdim=True)
+                if past_key_value.attn_cache[self.layer_idx]==[]:
+                    bs,n_heads,cache_len,cache_len = attn_weights.shape                
+                    past_key_value.attn_cache[self.layer_idx] = attn_weights
+                else:
+                    raise AssertionError("H2O: Flash Attention 2 expects the attn_cache to be empty.\n")
+        else:
+            past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
+
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
 

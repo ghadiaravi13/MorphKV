@@ -24,7 +24,7 @@ prompt_template = open("judge.txt", "r", encoding="utf-8").read()
 
 gpt_api_key = "GPT4_API_KEY"
 model_keys = {"gpt-4o-2024-05-13":gpt_api_key,
-              "mistral-large-latest": "MISTRAL_API_KEY"}
+              "mistral-large-latest": "Mue2YhdKumdycUEzCQjeiVPzOJD0FEPN"}
 model_link = {"gpt-4o-2024-05-13": "https://api.openai.com/v1/chat/completions",
               "mistral-large-latest": "https://api.mistral.ai/v1/chat/completions"}
 
@@ -139,6 +139,7 @@ for file in os.listdir(res_path):
     #     start = (i * total) // PROC_NUM
     #     end = None if i == PROC_NUM - 1 else ((i + 1) * total) // PROC_NUM
     # import pdb; pdb.set_trace()
+    print(file)
     if f"{file[:-6]}_judge.jsonl" not in os.listdir(res_path):
         print("Using LLM Judge!\n")
         fout = open(f"{res_path}{file[:-6]}_judge.jsonl", 'w', encoding='utf-8')
@@ -150,8 +151,11 @@ for file in os.listdir(res_path):
         for d in data:
             if d['prompt'] not in eval_prompts:
                 left_data.append(d)
-        fout = open(f"{res_path}{file[:-6]}_judge.jsonl", 'a', encoding='utf-8')
-        process_data(left_data,fout)
+        if len(left_data)>0:
+            fout = open(f"{res_path}{file[:-6]}_judge.jsonl", 'a', encoding='utf-8')
+            process_data(left_data,fout)
+        # else:
+        #     continue
     # pool.close()
     # pool.join()
     # fout.close()

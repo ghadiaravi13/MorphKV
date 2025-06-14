@@ -1,0 +1,20 @@
+{
+    "preds_ws30_mc600.0_ea1.0_morph_True_type_sum_fused_lenNone": {
+        "Relevance": 93.75,
+        "Accuracy": 85.83333333333334,
+        "Coherence": 83.33333333333333,
+        "Clarity": 85.83333333333334,
+        "Breadth and Depth": 60.0,
+        "Reading Experience": 73.33333333333333,
+        "total": 80.34722222222223
+    },
+    "preds_ws30_mc600.0_ea1.0_morph_True_type_h2o_lenNone": {
+        "Relevance": 93.75,
+        "Accuracy": 85.41666666666667,
+        "Coherence": 82.91666666666666,
+        "Clarity": 80.41666666666667,
+        "Breadth and Depth": 58.75,
+        "Reading Experience": 75.0,
+        "total": 79.375
+    }
+}

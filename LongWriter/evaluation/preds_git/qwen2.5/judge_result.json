@@ -1,0 +1,29 @@
+{
+    "preds_ws30_mc600.0_ea1.0_morph_True_type_sum_fused_lenNone": {
+        "Relevance": 88.75,
+        "Accuracy": 77.08333333333333,
+        "Coherence": 66.25,
+        "Clarity": 70.0,
+        "Breadth and Depth": 68.33333333333333,
+        "Reading Experience": 62.083333333333336,
+        "total": 72.08333333333333
+    },
+    "preds_ws30_mc600.0_ea1.0_morph_False_type_max_fused_lenNone": {
+        "Relevance": 94.16666666666667,
+        "Accuracy": 91.66666666666667,
+        "Coherence": 84.16666666666666,
+        "Clarity": 82.5,
+        "Breadth and Depth": 73.33333333333333,
+        "Reading Experience": 79.16666666666667,
+        "total": 84.16666666666667
+    },
+    "preds_ws30_mc600.0_ea1.0_morph_True_type_h2o_lenNone": {
+        "Relevance": 85.16949152542372,
+        "Accuracy": 75.84745762711864,
+        "Coherence": 63.13559322033898,
+        "Clarity": 64.40677966101694,
+        "Breadth and Depth": 65.67796610169492,
+        "Reading Experience": 57.6271186440678,
+        "total": 68.64406779661017
+    }
+}

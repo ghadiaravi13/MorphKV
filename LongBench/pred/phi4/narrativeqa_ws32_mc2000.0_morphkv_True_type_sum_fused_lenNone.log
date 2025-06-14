@@ -1,0 +1,9 @@
+2025-05-28 23:07:45,167 - WARNING - You are not running the flash-attention implementation, expect numerical differences.
+2025-05-28 23:07:48,407 - INFO - ........Input size: 16000 KV Cache size: {'key': 2001, 'value': 2001, 'attn_wts': 0, 'len': 16028}...........GPU Max Reserved: 34.103885824 GB
+
+2025-05-28 23:07:58,181 - INFO - ........Input size: 16000 KV Cache size: {'key': 2001, 'value': 2001, 'attn_wts': 0, 'len': 16022}...........GPU Max Reserved: 34.206646272 GB
+
+2025-05-28 23:08:14,000 - INFO - ........Input size: 8053 KV Cache size: {'key': 2001, 'value': 2001, 'attn_wts': 0, 'len': 8180}...........GPU Max Reserved: 34.206646272 GB
+
+2025-05-28 23:08:18,780 - INFO - ........Input size: 9052 KV Cache size: {'key': 2001, 'value': 2001, 'attn_wts': 0, 'len': 9061}...........GPU Max Reserved: 34.206646272 GB
+

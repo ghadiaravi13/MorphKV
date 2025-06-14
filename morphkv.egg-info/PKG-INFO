@@ -1,0 +1,28 @@
+Metadata-Version: 2.4
+Name: morphkv
+Version: 0.1.0
+Summary: A library for efficient key-value cache management in transformer models
+Home-page: https://github.com/ghadiaravi13/MorphKV
+Author: Ravi Ghadia
+Author-email: rghadia@utexas.edu
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: torch>=2.0.0
+Requires-Dist: transformers==4.45.0
+Requires-Dist: numpy
+Requires-Dist: plotly
+Provides-Extra: flash
+Requires-Dist: flash-attn>=2.0.0; extra == "flash"
+Dynamic: author
+Dynamic: author-email
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+MorphKV: A library for efficient key-value cache management in transformer models
