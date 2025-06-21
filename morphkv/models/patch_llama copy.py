@@ -211,55 +211,38 @@ class LlamaAttentionMorph(nn.Module):
             self.MAX_CAPACITY = int(config.morphkv['max_capacity'])
             self.morph_type = config.morphkv['morph_type'] 
             self.evict_after = config.morphkv['evict_after'] #for bursty eviction during generation, we evict only after cache is > max_capacity * evict_after (say, after every 10 tokens)
+            self.window_queries = [None]*self.config.num_hidden_layers
     
 
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
-        # if self.layer_idx==0:
-        #     import pdb; pdb.set_trace()
-        if past_key_value.attn_cache[self.layer_idx]!=[]:
-            if "h2o" in self.morph_type:
-                soft_scores = nn.functional.softmax(scores,dim=-1)
-                soft_scores[:,:,:,:past_key_value.attn_cache[self.layer_idx].shape[-1]] += past_key_value.attn_cache[self.layer_idx]
-                past_key_value.attn_cache[self.layer_idx] = soft_scores
-            else:
-                scores = torch.cat([past_key_value.attn_cache[self.layer_idx],scores],dim=2) 
-                #TODO: Unique head implementation next 1 line
-                if self.morph_type=='indp': scores[:,:,-1,-1] = -torch.inf
         
-        # we need to maintain two masks - one for KV and one for Attn weight caching
+        softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
         if(key_heads!=query_heads):
-            #TODO: For GQA, we reduce scores by summing over grouped heads
-            if self.morph_type=='indp': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-(self.WIN_SIZE+1):-1,:], -torch.inf) #work with last WIN_SIZE+1 tokens, exclude the current token    
-                init_mask_kv = torch.where(torch.any(torch.eq(sim_tokens.scatter_(-1,torch.topk(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1], dim=-1, k=self.SIM_THRESH).indices,0.0),0),dim=2,keepdim=True),0.0,-torch.inf)
-            elif "max" in self.morph_type or self.morph_type=='max_fused': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+            #For GQA, we reduce scores by summing over grouped heads -> changed to taking max over grouped heads
+            if "max" in self.morph_type or self.morph_type=='max_fused': 
+                sim_tokens = torch.full_like(scores[:,:key_heads,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
             elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                sim_tokens = torch.full_like(scores[:,:key_heads,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
             init_mask_kv[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
+            
 
-        # we need to maintain two masks - one for KV and one for Attn weight caching
-        if self.morph_type=='indp': 
-            sim_tokens = torch.full_like(scores[:,:,-(self.WIN_SIZE+1):-1,:], -torch.inf) #work with last WIN_SIZE+1 tokens, exclude the current token
-            init_mask_attn = torch.where(torch.any(torch.eq(sim_tokens.scatter_(-1,torch.topk(scores[:, :, -(self.WIN_SIZE+1):-1], dim=-1, k=self.SIM_THRESH).indices,0.0),0),dim=2,keepdim=True),0.0,-torch.inf)
-        elif "max" in self.morph_type or self.morph_type=='max_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        elif "h2o" in self.morph_type: 
+        if "max" in self.morph_type or self.morph_type=='max_fused': 
             sim_tokens = torch.full_like(scores[:,:,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(soft_scores[:, :, :, :-(self.WIN_SIZE+1)], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        init_mask_attn[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
-
-        if(key_heads!=query_heads):
-            #TODO: For GQA, we reduce scores by summing over grouped heads
-            past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
-        else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx) 
+            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+        elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
+            sim_tokens = torch.full_like(scores[:,:,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
         
+        init_mask_attn[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
+        
+        if(key_heads!=query_heads):
+            #For GQA, we have seperate masks for attention and KVs
+            past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
+        else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
+        
+
         return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
 
     def forward(
@@ -272,9 +255,10 @@ class LlamaAttentionMorph(nn.Module):
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        query_cache: List = None,  # will become mandatory in v4.46
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-
+        self.window_queries = query_cache
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
@@ -321,17 +305,14 @@ class LlamaAttentionMorph(nn.Module):
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            if "snapkv" in self.morph_type or "h2o" in self.morph_type: # or self.config.hopformer:
-                key_states = repeat_kv(key_states, self.num_key_value_groups)
-                value_states = repeat_kv(value_states, self.num_key_value_groups)
-                query_heads = query_states.shape[1]
-                key_heads = key_states.shape[1]
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         if key_states.shape[1]!=query_states.shape[1]:
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
         
+        if self.config.morphkv: # cache queries for MorphKV
+            query_states = past_key_value.update_win_queries(query_states[:,:,-self.WIN_SIZE:,:],self.layer_idx)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         
         # use MorphKV only in generative phase, ie, when hidden states has 1 token (the newly generated)
@@ -353,44 +334,6 @@ class LlamaAttentionMorph(nn.Module):
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
-
-        if self.config.morphkv:
-            #cache attn weights in past key value
-            if past_key_value.attn_cache[self.layer_idx]==[]:
-                # need to add another column to attn matrix to account for next token
-                #TODO: Unique head implementation next 2 lines
-                if self.morph_type=='indp': 
-                    for i in range(1,min(attn_weights.shape[-1],self.WIN_SIZE)+1):
-                        attn_weights[:,:,-i,-i] = -torch.inf
-                if "h2o" in self.morph_type:
-                    past_key_value.attn_cache[self.layer_idx] = nn.functional.softmax(attn_weights,dim=-1)
-                else:
-                    print("Error with below implementation, expected to use Flash attn for prefilling!!!")
-                    # bs,n_heads,cache_len,cache_len = attn_weights.shape                
-                    # past_key_value.attn_cache[self.layer_idx] = torch.cat([attn_weights[:,:,-self.WIN_SIZE:],torch.full((bs,n_heads,min(self.WIN_SIZE,cache_len),1),-torch.inf).to(attn_weights.device)],dim=-1)
-            else:
-                # import pdb;pdb.set_trace()
-                if "h2o" in self.morph_type:
-                    pass
-                else:
-                    if key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after: # only then the init mask would have been calculated
-                        bs, n_heads, win_size, seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                        self.evict_after = self.config.morphkv['evict_after'] # after the first eviction, evict only after 'evict_after' factor times KV size is reached
-                        
-                        # remove the row corresponding to oldest window, and append the newly generated attn weight profile
-                        past_key_value.attn_cache[self.layer_idx] = torch.roll(past_key_value.attn_cache[self.layer_idx],shifts=-1,dims=2)
-                        past_key_value.attn_cache[self.layer_idx][:, :, -1:] = attn_weights.transpose(3,2)[init_mask.squeeze(2)==0].view(bs, n_heads, -1, 1).transpose(3,2)
-                        
-                    else:
-                        if key_states.shape[2]<=self.WIN_SIZE: # attn cache has been padded till the max size, hence indexing the current attention row properly
-                            past_key_value.attn_cache[self.layer_idx][:,:,key_states.shape[2]-1:key_states.shape[2],:] = attn_weights
-                        else:
-                            past_key_value.attn_cache[self.layer_idx] = torch.roll(past_key_value.attn_cache[self.layer_idx],shifts=-1,dims=2) #shift up by 1 position on the 2nd dim
-                            #TODO: LEADS TO MEMORY CORRUPTION!!! # past_key_value.attn_cache[self.layer_idx][:, :, :(self.WIN_SIZE-1)] = past_key_value.attn_cache[self.layer_idx][:, :, -(self.WIN_SIZE-1):]
-                            past_key_value.attn_cache[self.layer_idx][:, :, -1:] = attn_weights
-                        bs, n_heads, win_size, seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                    past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx],torch.full((bs,n_heads,win_size,1),-torch.inf).to(past_key_value.attn_cache[self.layer_idx].device)],dim=-1)
-            
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
@@ -452,15 +395,10 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
                 "make sure to use `sdpa` in the mean time, and open an issue at https://github.com/huggingface/transformers"
             )
         
-        # import pdb; pdb.set_trace()
-        if "snapkv" in self.morph_type:
-            init_snapkv(self)
-        
-        if hidden_states.shape[1]==1 and self.layer_idx>-1:# and False:
-            # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
-            logger.warning_once(
-                "LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation."
-            )
+        if hidden_states.shape[1]==1 and self.config.morphkv and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY:
+            # logger.warning_once(
+            #     "MistralModel was using MistralFlashAttention2 for prefilling, which does not support MorphKV eviction. Falling back to the eager attention implementation.\n\n"
+            # )
             return super(LlamaFlashAttention2Morph,self).forward(
                 hidden_states=hidden_states,
                 attention_mask=attention_mask,
@@ -469,11 +407,15 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
                 output_attentions=output_attentions,
                 use_cache=use_cache,
                 cache_position=cache_position,
-                position_embeddings=position_embeddings,
+                query_cache=self.window_queries if self.config.morphkv else None,
             )
         
         output_attentions = False
         
+        # reset window queries for every new sequence
+        if(hidden_states.shape[1]!=1):
+            past_key_value.query_cache[self.layer_idx] = []
+
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
@@ -486,7 +428,6 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        kv_seq_len = key_states.shape[-2]
 
         if position_embeddings is None:
             logger.warning_once(
@@ -503,21 +444,7 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            if "snapkv" in self.morph_type: 
-                if hidden_states.shape[1]!=1: #SnapKV works only in prefill mode
-                    key_states = repeat_kv(key_states, self.num_key_value_groups)
-                    value_states = repeat_kv(value_states, self.num_key_value_groups)
-                    key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)
-                    past_key_value.update(key_states_compress, value_states_compress, self.layer_idx, cache_kwargs)
-                else:
-                    key_states = repeat_kv(key_states, self.num_key_value_groups)
-                    value_states = repeat_kv(value_states, self.num_key_value_groups)
-                    key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-            else:
-                if "h2o" in self.morph_type:
-                    key_states = repeat_kv(key_states, self.num_key_value_groups)
-                    value_states = repeat_kv(value_states, self.num_key_value_groups)
-                key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
         # repeat k/v heads if n_kv_heads < n_heads
         if key_states.shape[1]<query_states.shape[1]:
             key_states = repeat_kv(key_states, self.num_key_value_groups)
@@ -569,68 +496,11 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
             use_top_left_mask=self._flash_attn_uses_top_left_mask,
             is_causal=self.is_causal,
         )
-        if self.config.morphkv and self.layer_idx>-1:
-            query_states = query_states.transpose(1, 2)
-            key_states = key_states.transpose(1, 2)
-            #key_states = repeat_kv(key_states, self.num_key_value_groups)
-            if "h2o" in self.morph_type:
-                attn_weights = nn.functional.softmax(torch.matmul(query_states[:,:,-self.MAX_CAPACITY:,:], key_states.transpose(2, 3)) / math.sqrt(self.head_dim),dim=-1)
-                attn_weights = torch.tril(attn_weights,diagonal=max(attn_weights.shape[-1]-(self.MAX_CAPACITY),0))
-                attn_weights = attn_weights.sum(dim=2, keepdim=True)
-            else:    
-                attn_weights = torch.matmul(query_states[:,:,-self.WIN_SIZE:,:], key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        # cache win queries after attn output
+        query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-self.WIN_SIZE:,:],self.layer_idx)
 
-        # use hopformer only in generative phase, ie, when hidden states has 1 token (the newly generated)
-        if self.config.morphkv and self.layer_idx>-1 and key_states.shape[2]>= 1 + self.MAX_CAPACITY:
-            # import pdb; pdb.set_trace()
-            if hidden_states.shape[1]==1:
-                causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-                attn_weights, init_mask = self.morphkv_mask(attn_weights, causal_mask, past_key_value, key_heads, query_heads)#>0)
-                # hopformer call must have emptied KV Cache, so cleanup!
-                if self.garbage[self.layer_idx]==True:
-                    torch.cuda.empty_cache()
-                    # gc.collect()
-                    past_key_value.cleaned[self.layer_idx] = True
-                    self.garbage[self.layer_idx] = False
-            # seems like a new sequence, reset garbage variable to true        
-            else: self.garbage[self.layer_idx] = True
-        else:
-            past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
+        past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
 
-        if self.config.morphkv and self.layer_idx>-1:# and key_states.shape[2]>=(self.WIN_SIZE*self.SIM_THRESH):
-            #cache attn weights in past key value
-            if past_key_value.attn_cache[self.layer_idx]==[]:
-                # need to add another column to attn matrix to account for next token
-                #TODO: Unique head implementation next 2 lines
-                if self.morph_type=='indp': 
-                    for i in range(1,min(attn_weights.shape[-1],self.WIN_SIZE)+1):
-                        attn_weights[:,:,-i,-i] = -torch.inf
-                if "h2o" in self.morph_type:
-                    bs,n_heads,cache_len,cache_len = attn_weights.shape                
-                    past_key_value.attn_cache[self.layer_idx] = attn_weights#torch.cat([nn.functional.softmax(attn_weights[:,:,-1:,:],dim=-1),torch.full((bs,n_heads,1,1),0).to(attn_weights.device)],dim=-1)
-                else:
-                    bs,n_heads,cache_len,cache_len = attn_weights.shape                
-                    if cache_len<self.WIN_SIZE:
-                        attn_weights = torch.cat([attn_weights,torch.full((bs,n_heads,self.WIN_SIZE-cache_len,cache_len),-torch.inf).to(attn_weights.device)],dim=2)
-                    past_key_value.attn_cache[self.layer_idx] = torch.cat([attn_weights[:,:,-self.WIN_SIZE:,:],torch.full((bs,n_heads,self.WIN_SIZE,1),-torch.inf).to(attn_weights.device)],dim=-1)
-            else:
-                raise NotImplementedError("Attn cache update not expected for Flash Attention")
-                # # import pdb;pdb.set_trace()
-                # bs, n_heads, win_size, seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                # if key_states.shape[2]>= 1 + self.MAX_CAPACITY: # only then the init mask would have been calculated
-                #     past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx][:,:,1:], attn_weights.transpose(3,2)[init_mask.squeeze(2)==0].view(bs, n_heads, -1, 1).transpose(3,2)],dim=2)
-                # else:
-                #     past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx][:,:,1:], attn_weights],dim=2)
-                # # need to add another column to attn matrix to account for next token
-                # # bs,n_heads,win_size,seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                # past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx],torch.full((bs,n_heads,win_size,1),-torch.inf).to(past_key_value.attn_cache[self.layer_idx].device)],dim=-1)
-            # print(f".........Layer: {self.layer_idx} attn cached........")
-
-        # # upcast attention to fp32
-        # if self.SOFTMAX_TYPE=='gumbel':
-        #     attn_weights = nn.functional.gumbel_softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        # else:
-        #     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
 

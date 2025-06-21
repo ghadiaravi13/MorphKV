@@ -329,14 +329,10 @@ class MorphOffloadedCache(DynamicCache):
             self.key_cache[prev_layer_idx] = self.key_cache[prev_layer_idx].to("cpu", non_blocking=True)
             self.value_cache[prev_layer_idx] = self.value_cache[prev_layer_idx].to("cpu", non_blocking=True)
         
-        
-            if self.attn_cache[prev_layer_idx]!=[]:
-                try:
-                    self.attn_cache[prev_layer_idx] = self.attn_cache[prev_layer_idx].to("cpu", non_blocking=True)
-                except Exception as e:
-                    import pdb; pdb.set_trace()
-        # if self.query_cache[prev_layer_idx]!=[]:    
-        #     self.query_cache[prev_layer_idx] = self.query_cache[prev_layer_idx].to("cpu", non_blocking=True)
+        if self.attn_cache[prev_layer_idx]!=[]:    
+            self.attn_cache[prev_layer_idx] = self.attn_cache[prev_layer_idx].to("cpu", non_blocking=True)
+        if self.query_cache[prev_layer_idx]!=[]:    
+            self.query_cache[prev_layer_idx] = self.query_cache[prev_layer_idx].to("cpu", non_blocking=True)
         
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
@@ -350,11 +346,11 @@ class MorphOffloadedCache(DynamicCache):
             self.prefetch_stream.synchronize()
             key_tensor = self.key_cache[layer_idx]
             value_tensor = self.value_cache[layer_idx]
-            # query_tensor = self.query_cache[layer_idx]
+            query_tensor = self.query_cache[layer_idx]
             
             # Prefetch the next layer
             self.prefetch_layer((layer_idx + 1) % len(self))
-            return (key_tensor, value_tensor) #query_tensor)
+            return (key_tensor, value_tensor, query_tensor)
         else:
             raise KeyError(f"Cache only has {len(self)} layers, attempted to access layer with index {layer_idx}")
 
@@ -364,7 +360,7 @@ class MorphOffloadedCache(DynamicCache):
         keys and values
         """
         for layer_idx in range(len(self)):
-            yield (self.key_cache[layer_idx], self.value_cache[layer_idx])#, self.query_cache[layer_idx])
+            yield (self.key_cache[layer_idx], self.value_cache[layer_idx], self.query_cache[layer_idx])
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Saves the beam indices and reorders the cache when the tensor is back to its device."""
@@ -417,7 +413,7 @@ class MorphOffloadedCache(DynamicCache):
             if layer_idx==len(self)-1: # if prefilling last layer KV, prefetch 0th layer KV
                 self.prefetch_layer((layer_idx + 1) % len(self))
         else:
-            key_tensor, value_tensor = self[layer_idx]
+            key_tensor, value_tensor, query_tensor = self[layer_idx]
             self.key_cache[layer_idx] = torch.cat([key_tensor, key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([value_tensor, value_states], dim=-2)
             

@@ -1,0 +1,10 @@
+2025-06-21 16:11:45,442 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 16:12:49,157 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 16:13:41,034 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 16:18:12,162 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 16:24:54,333 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 16:30:09,125 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 16:30:34,282 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 16:44:49,966 - WARNING - LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation.
+2025-06-21 17:13:58,125 - INFO - ........Input size: 609 KV Cache size: {'key': 4001, 'value': 4001, 'attn_wts': 200, 'len': 8608}...........GPU Max Reserved: 26.70723072 GB
+

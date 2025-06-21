@@ -326,7 +326,7 @@ class LlamaAttentionMorph(nn.Module):
                 value_states = repeat_kv(value_states, self.num_key_value_groups)
                 query_heads = query_states.shape[1]
                 key_heads = key_states.shape[1]
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, None, cache_kwargs)
 
         if key_states.shape[1]!=query_states.shape[1]:
             key_states = repeat_kv(key_states, self.num_key_value_groups)
@@ -461,7 +461,7 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
             logger.warning_once(
                 "LlamaModel was using LlamaFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation."
             )
-            return super(LlamaFlashAttention2Morph,self).forward(
+            return super(LlamaFlashAttention2,self).forward(
                 hidden_states=hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
