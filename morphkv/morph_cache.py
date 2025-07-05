@@ -335,8 +335,8 @@ class MorphOffloadedCache(DynamicCache):
                     self.attn_cache[prev_layer_idx] = self.attn_cache[prev_layer_idx].to("cpu", non_blocking=True)
                 except Exception as e:
                     import pdb; pdb.set_trace()
-        # if self.query_cache[prev_layer_idx]!=[]:    
-        #     self.query_cache[prev_layer_idx] = self.query_cache[prev_layer_idx].to("cpu", non_blocking=True)
+            if self.query_cache[prev_layer_idx]!=[]:    
+                self.query_cache[prev_layer_idx] = self.query_cache[prev_layer_idx].to("cpu", non_blocking=True)
         
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:

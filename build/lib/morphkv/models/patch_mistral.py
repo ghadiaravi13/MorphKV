@@ -164,24 +164,24 @@ class MistralAttentionMorph(nn.Module):
 
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
         
-        softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
+        #softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
         if(key_heads!=query_heads):
             #For GQA, we reduce scores by summing over grouped heads -> changed to taking max over grouped heads
             if "max" in self.morph_type or self.morph_type=='max_fused': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
             elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
             init_mask_kv[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
             
 
         if "max" in self.morph_type or self.morph_type=='max_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
         elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
+            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
         
         init_mask_attn[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
         
@@ -232,7 +232,7 @@ class MistralAttentionMorph(nn.Module):
             value_states = repeat_kv(value_states, self.num_key_value_groups)
         
         if self.config.morphkv: # cache queries for MorphKV
-            query_states = past_key_value.update_win_queries(query_states[:,:,-self.WIN_SIZE:,:],self.layer_idx)
+            query_states = past_key_value.update_win_queries(query_states[:,:,-(self.WIN_SIZE+1):,:],self.layer_idx)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         
         
@@ -423,7 +423,7 @@ class MistralFlashAttention2Morph(MistralAttentionMorph):
         )
 
         # cache win queries after attn output
-        query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-self.WIN_SIZE:,:],self.layer_idx)
+        query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-(self.WIN_SIZE+1):,:],self.layer_idx)
 
         past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
 
