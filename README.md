@@ -30,6 +30,8 @@ MorphKV is integrated within the huggingface transformer library, allowing it to
 #### 1. Pre-Requisites
 Currently, MorphKV is thoroughly tested with transformers 4.45.0 and hence we recommend maintaining this version of transformers for running MorphKV, particularly since the attention class has undergone major restructuring in the recent versions.
 
+**Note: LongGenBench eval requires vLLM which needs a different transformers version. So the user is recommended to have a seperate environment or fix version dependencies before running LongGenBench eval.py**
+
 <pre>
   pip install transformers==4.45.0
 </pre>
