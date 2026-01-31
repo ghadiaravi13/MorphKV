@@ -242,8 +242,10 @@ class LlamaAttentionMorph(nn.Module):
             past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
         else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
         
+        # absolutely no reason to mask the current scores, let the first token attend to full KV cache
+        # return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
 
-        return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
+        return scores[:,:,-1:,:], init_mask_attn
 
     def forward(
         self,

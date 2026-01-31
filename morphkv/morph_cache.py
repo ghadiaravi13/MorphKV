@@ -108,15 +108,32 @@ class DynamicCache(Cache):
 
                 ##Efficient
                 assert BS==1, "Only supported for BS = 1 for now.\n"
-                indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
-                self.key_cache[layer_idx] = torch.index_select(self.key_cache[layer_idx].view(BS,-1,DIM), dim=1, index=indices).view(BS,NH,-1,DIM)
+                
+                important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
+                non_important_indices = (init_mask.squeeze(2).reshape(-1)!=0).nonzero(as_tuple=True)[0]
+
+                important_key_cache = torch.index_select(self.key_cache[layer_idx].view(BS,-1,DIM), dim=1, index=important_indices).view(BS,NH,-1,DIM)
+                non_important_key_cache = torch.index_select(self.key_cache[layer_idx].view(BS,-1,DIM), dim=1, index=non_important_indices).view(BS,NH,-1,DIM)
+                
+                # merge non_important_key_cache via average
+                non_important_key_cache = non_important_key_cache.mean(dim=2, keepdim=True)
+                self.key_cache[layer_idx] = torch.cat([non_important_key_cache, important_key_cache], dim=2)
+                # self.key_cache[layer_idx] = torch.index_select(self.key_cache[layer_idx].view(BS,-1,DIM), dim=1, index=indices).view(BS,NH,-1,DIM)
             if self.value_cache[layer_idx]!=[]: 
                 BS,NH,LEN,DIM = self.value_cache[layer_idx].shape
                 #self.value_cache[layer_idx] = self.value_cache[layer_idx][(init_mask==0).squeeze(2)].view(BS,NH,-1,DIM) #pick only the relevant indices along the seq_len axis (BS,num_heads,seq_len,hidden_dim)
 
                 # Efficient
-                indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
-                self.value_cache[layer_idx] = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=indices).view(BS,NH,-1,DIM)
+                important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
+                non_important_indices = (init_mask.squeeze(2).reshape(-1)!=0).nonzero(as_tuple=True)[0]
+
+                important_value_cache = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=important_indices).view(BS,NH,-1,DIM)
+                non_important_value_cache = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=non_important_indices).view(BS,NH,-1,DIM)
+                
+                # merge non_important_value_cache via average
+                non_important_value_cache = non_important_value_cache.mean(dim=2, keepdim=True)
+                self.value_cache[layer_idx] = torch.cat([non_important_value_cache, important_value_cache], dim=2)
+                # self.value_cache[layer_idx] = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=indices).view(BS,NH,-1,DIM)
             if self.attn_cache[layer_idx]!=[]: 
                 BS,NH,WS,LEN = self.attn_cache[layer_idx].shape
                 #self.attn_cache[layer_idx] = self.attn_cache[layer_idx].transpose(3,2)[(init_mask_attn==0).squeeze(2)].view(BS,NH,-1,WS).transpose(3,2) #pick only the relevant indices along the seq_len axis (BS,num_heads,win_size,seq_len)
