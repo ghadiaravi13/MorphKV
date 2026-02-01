@@ -93,7 +93,7 @@ if __name__ == '__main__':
     all_files = os.listdir(path)
     print("Evaluating on:", all_files)
     for filename in all_files:
-        if not filename.endswith("jsonl") or "gov" in filename:
+        if not filename.endswith("jsonl"): # or "gov" in filename:
             continue
         predictions, answers, lengths = [], [], []
         dataset = ".".join(filename.split('.')[:-1])
@@ -103,6 +103,8 @@ if __name__ == '__main__':
             dataset_name = "passage_count"
         elif "multi_news" in filename:
             dataset_name = "multi_news"
+        elif "gov" in filename:
+            dataset_name = "gov_report"
         elif "multi" in filename:
             dataset_name = "_".join(filename.split("_")[:2])
         else: dataset_name = dataset.split('_')[0]

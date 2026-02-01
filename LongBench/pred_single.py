@@ -204,7 +204,7 @@ def load_model_and_tokenizer(path, model_name, device, args):
                 warning_flag = False
                 break
         assert warning_flag==False, f"Transformers version {transformers_version} is not compatible with MorphKV. MorphKV is tested with Transformers version {version_list}. Please install this by: pip install transformers==4.45.0"
-        cache_dir = "/home/shared/model_chkpts/"
+        cache_dir = "/home/ravighadia/MorphKV/model_chkpts/"
         os.makedirs(cache_dir, exist_ok=True)
 
         # Load the model and tokenizer
@@ -272,19 +272,22 @@ if __name__ == '__main__':
         if args.ablation:
             if not os.path.exists("pred_mem"):
                 os.makedirs("pred_mem")
-            data = load_dataset('THUDM/LongBench', f"{dataset}", split='test')
+            # data = load_dataset('THUDM/LongBench', f"{dataset}", split='test')
+            data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]
             if not os.path.exists(f"pred_mem/{model_name}"):
                 os.makedirs(f"pred_mem/{model_name}")
             out_path = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
             logfile = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
         elif args.e:
-            data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
+            # data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
+            data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]
             if not os.path.exists(f"pred_e/{model_name}"):
                 os.makedirs(f"pred_e/{model_name}")
             out_path = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
             logfile = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
         else:
-            data = load_dataset('THUDM/LongBench', dataset, split='test')
+            # For .jsonl files (JSON Lines format):
+            data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]#load_dataset('THUDM/LongBench', dataset, split='test')
             if not os.path.exists(f"{pred_path}/{model_name}"):
                 os.makedirs(f"{pred_path}/{model_name}")
             out_path = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
