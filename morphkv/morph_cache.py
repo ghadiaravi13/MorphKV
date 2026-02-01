@@ -55,6 +55,7 @@ class DynamicCache(Cache):
         self.max_capacity = torch.inf
         self.win_size = torch.inf
         self.prefill = False
+        self.fusion_done = False # first cleanup call should trigger fusion
     
     def set_max_capacity(self, max_capacity:int, win_size:int):
         self.max_capacity = max_capacity
@@ -91,7 +92,6 @@ class DynamicCache(Cache):
             init_mask_attn, #use for attn pruning
             layer_idx: int,
             dummy: bool = False,
-            is_prefill: bool = False
     ) -> None:
         """
         clears unnecessary KV cache
@@ -110,15 +110,7 @@ class DynamicCache(Cache):
                 ##Efficient
                 assert BS==1, "Only supported for BS = 1 for now.\n"
 
-                if not is_prefill:
-                    init_mask[:, :, 0, :] = 0.0 # during decode, we will always attend to the first token (because it is the fused token)
-                    important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
-                    important_key_cache = torch.index_select(self.key_cache[layer_idx].view(BS,-1,DIM), dim=1, index=important_indices).view(BS,NH,-1,DIM)
-                    self.key_cache[layer_idx] = important_key_cache
-
-                    del important_indices
-                
-                else:
+                if not self.fusion_done:
                     important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
                     non_important_indices = (init_mask.squeeze(2).reshape(-1)!=0).nonzero(as_tuple=True)[0]
 
@@ -131,19 +123,19 @@ class DynamicCache(Cache):
 
                     del important_indices, non_important_indices, important_key_cache, non_important_key_cache
                     # self.key_cache[layer_idx] = torch.index_select(self.key_cache[layer_idx].view(BS,-1,DIM), dim=1, index=indices).view(BS,NH,-1,DIM)
+                else:
+                    important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
+                    important_key_cache = torch.index_select(self.key_cache[layer_idx].view(BS,-1,DIM), dim=1, index=important_indices).view(BS,NH,-1,DIM)
+                    self.key_cache[layer_idx] = important_key_cache
+
+                    del important_indices
+                    
             if self.value_cache[layer_idx]!=[]: 
                 BS,NH,LEN,DIM = self.value_cache[layer_idx].shape
                 #self.value_cache[layer_idx] = self.value_cache[layer_idx][(init_mask==0).squeeze(2)].view(BS,NH,-1,DIM) #pick only the relevant indices along the seq_len axis (BS,num_heads,seq_len,hidden_dim)
 
                 # Efficient
-                if not is_prefill:
-                    init_mask[:, :, 0, :] = 0.0 # during decode, we will always attend to the first token (because it is the fused token)
-                    important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
-                    important_value_cache = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=important_indices).view(BS,NH,-1,DIM)
-                    self.value_cache[layer_idx] = important_value_cache
-
-                    del important_indices
-                else:
+                if not self.fusion_done:
                     important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
                     non_important_indices = (init_mask.squeeze(2).reshape(-1)!=0).nonzero(as_tuple=True)[0]
 
@@ -153,7 +145,19 @@ class DynamicCache(Cache):
                     # merge non_important_value_cache via average
                     non_important_value_cache = non_important_value_cache.mean(dim=2, keepdim=True)
                     self.value_cache[layer_idx] = torch.cat([non_important_value_cache, important_value_cache], dim=2)
+                    
+                    self.fusion_done = True # mark fusion as done, so that we don't need to fuse in further decode steps
                     # self.value_cache[layer_idx] = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=indices).view(BS,NH,-1,DIM)
+
+                    del important_indices, non_important_indices, important_value_cache, non_important_value_cache
+                else:
+                    important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
+                    important_value_cache = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=important_indices).view(BS,NH,-1,DIM)
+                    self.value_cache[layer_idx] = important_value_cache
+
+                    del important_indices
+                    
+
             if self.attn_cache[layer_idx]!=[]: 
                 BS,NH,WS,LEN = self.attn_cache[layer_idx].shape
                 #self.attn_cache[layer_idx] = self.attn_cache[layer_idx].transpose(3,2)[(init_mask_attn==0).squeeze(2)].view(BS,NH,-1,WS).transpose(3,2) #pick only the relevant indices along the seq_len axis (BS,num_heads,win_size,seq_len)
@@ -163,6 +167,7 @@ class DynamicCache(Cache):
                 indices_attn = (init_mask_attn.reshape(-1)==0).nonzero(as_tuple=True)[0]
                 self.attn_cache[layer_idx] = torch.index_select(self.attn_cache[layer_idx].view(-1),dim=0,index=indices_attn).reshape(BS,NH,WS,-1)
             if layer_idx==0:
+                # import pdb; pdb.set_trace()
                 if self.key_cache[layer_idx] != []: self.cache_size['key'] = max(self.cache_size['key'],self.key_cache[layer_idx].shape[2])#len(self.key_cache) * self.key_cache[0].shape[0] * self.key_cache[0].shape[1] * self.key_cache[0].shape[2] * self.key_cache[0].shape[3])
                 if self.value_cache[layer_idx] != []: self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2]) #len(self.value_cache) * self.value_cache[0].shape[0] * self.value_cache[0].shape[1] * self.value_cache[0].shape[2] * self.value_cache[0].shape[3])
                 if self.attn_cache[layer_idx] != []: self.cache_size['attn_wts'] = max(self.cache_size['attn_wts'], self.attn_cache[layer_idx].shape[2]) #len(self.attn_cache) * self.attn_cache[0].shape[0] * self.attn_cache[0].shape[1] * self.attn_cache[0].shape[2] * self.attn_cache[0].shape[3])    

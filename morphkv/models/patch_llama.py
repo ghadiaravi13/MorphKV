@@ -212,37 +212,50 @@ class LlamaAttentionMorph(nn.Module):
             self.morph_type = config.morphkv['morph_type'] 
             self.evict_after = config.morphkv['evict_after'] #for bursty eviction during generation, we evict only after cache is > max_capacity * evict_after (say, after every 10 tokens)
             self.window_queries = [None]*self.config.num_hidden_layers
-            self.prefill_flag = False
+            self.prefill_flag = True
     
 
-    def morphkv_mask(self, scores, past_key_value, key_heads, query_heads, is_prefill: bool = False):
+    def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
         
         #softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
+        start_idx = 0
+        if not past_key_value.fusion_done:
+            start_idx = 1 # if fusion is done, we need to attend to the fused token
+
         if(key_heads!=query_heads):
             #For GQA, we reduce scores by summing over grouped heads -> changed to taking max over grouped heads
             if "max" in self.morph_type or self.morph_type=='max_fused': 
                 sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE-start_idx).indices+start_idx,0.0)
             elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
                 sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE-start_idx).indices+start_idx,0.0)
+            
             init_mask_kv[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
+            
+            if not past_key_value.fusion_done:
+                init_mask_kv[:, :, -1, :start_idx] = 0.0 # if fusion is done, we need to attend to the fused token
             
 
         # else:
-        if "max" in self.morph_type or self.morph_type=='max_fused': 
+        if "max" in self.morph_type or self.morph_type=='max_fused':
+            
             sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE-start_idx).indices+start_idx,0.0)
+        
         elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
+        
             sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE-start_idx).indices+start_idx,0.0)
         
         init_mask_attn[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
+        if not past_key_value.fusion_done:
+            init_mask_attn[:, :, -1, :start_idx] = 0.0 # if fusion is done, we need to attend to the fused token
         
         if(key_heads!=query_heads):
             #For GQA, we have seperate masks for attention and KVs
-            past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx, is_prefill=is_prefill) 
-        else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx, is_prefill=is_prefill)
+            past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
+        else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
         
         # absolutely no reason to mask the current scores, let the first decoded token attend to full KV cache
         # return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
@@ -323,8 +336,7 @@ class LlamaAttentionMorph(nn.Module):
         if self.config.morphkv and key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after:
             if hidden_states.shape[1]==1:
                 causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] if attention_mask is not None else None
-                attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads, is_prefill=self.prefill_flag)
-                self.prefill_flag = True
+                attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
 
                 
                 # morphkv call must have emptied KV Cache, so cleanup!
