@@ -205,7 +205,8 @@ class Phi3AttentionMorph(nn.Module):
         else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
         
 
-        return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
+        # return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn no reason to add mask to scores, let the current decode token attend to current KV
+        return scores[:,:,-1:,:], init_mask_attn
 
     def forward(
         self,
