@@ -271,11 +271,12 @@ class LlamaAttentionMorph(nn.Module):
         useful_scores_acc_head_acc_window = useful_scores_acc_head.sum(dim=2, keepdim=True)
         # sm_scores = nn.functional.softmax(useful_scores_acc_head_acc_window,dim=-1)
 
-        temperature = 1.0
+        temperature = 0.2
         sm_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)]/temperature,dim=-1).mean(dim=2, keepdim=True)
-        sm_scores = sm_scores.view(sm_scores.shape[0],key_heads,-1,sm_scores.shape[2],sm_scores.shape[3]).mean(dim=2)
+        sm_scores = sm_scores.view(sm_scores.shape[0],key_heads,-1,sm_scores.shape[2],sm_scores.shape[3]).max(dim=2)[0] # max reduction over heads
         
         headwise_bkts = []
+        headwise_bkt_wts = []
         B = self.MAX_CAPACITY
 
         # import pdb; pdb.set_trace()
@@ -287,6 +288,7 @@ class LlamaAttentionMorph(nn.Module):
             bkts = []
             curr_sum = 0
             curr_bucket = []
+            curr_bkt_wts = []
             
             for i in range(k_len-1,0,-1): # start from the last token and go backwards to avoid accumulation for recent tokens
             
@@ -297,17 +299,28 @@ class LlamaAttentionMorph(nn.Module):
                 if(curr_sum > (1-acc)/(B-b)):
                     curr_sum = 0
                     bkts.append(curr_bucket)
+                    curr_bkt_wts.append(len(curr_bucket))
                     b += 1
                     curr_bucket = []
 
                     if b == B-1: # last bucket, add all remaining tokens
                         curr_bucket = range(i, k_len)
                         bkts.append(curr_bucket)
+                        curr_bkt_wts.append(len(curr_bucket))
                         break
             
             headwise_bkts.append(bkts[::-1]) # reverse the bucket list to get the tokens in the correct order
+            
+            if len(curr_bkt_wts) < B: # if we couldn't fill all buckets, fill the remaining entries with 1
+                curr_bkt_wts.extend([1]*(B-len(curr_bkt_wts)))
+            for g in range(query_heads//key_heads):
+                headwise_bkt_wts.append(curr_bkt_wts) 
         
         past_key_value.fuse_kv(headwise_bkts, self.MAX_CAPACITY, self.layer_idx)
+
+        attn_logit_offsets = torch.log(torch.tensor(headwise_bkt_wts, dtype=torch.float32, device=scores.device))
+        attn_logit_offsets = attn_logit_offsets.view(1, query_heads, 1, B)
+        return attn_logit_offsets
 
     def forward(
         self,
@@ -384,17 +397,19 @@ class LlamaAttentionMorph(nn.Module):
             if hidden_states.shape[1]==1:
                 causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] if attention_mask is not None else None
                 # attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
-                self.morphkv_plus_fuse(attn_weights, past_key_value, key_heads, query_heads)
+                attn_logit_offsets = self.morphkv_plus_fuse(attn_weights, past_key_value, key_heads, query_heads)
                 
                 key_states = past_key_value.key_cache[self.layer_idx]
                 value_states = past_key_value.value_cache[self.layer_idx]
                 if key_states.shape[1]!=query_states.shape[1]:
                     key_states = repeat_kv(key_states, self.num_key_value_groups)
                     value_states = repeat_kv(value_states, self.num_key_value_groups)
-                attn_weights = torch.matmul(query_states[:,:,-1:,...], key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
+                recent_query = query_states[:,:,-1:,...]
+                attn_weights = torch.matmul(recent_query, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+                attn_weights = attn_weights + attn_logit_offsets
                 # import pdb; pdb.set_trace()
-
+                
+                
                 # morphkv call must have emptied KV Cache, so cleanup!
                 if self.garbage[self.layer_idx]==True:
                     torch.cuda.empty_cache()
@@ -406,6 +421,8 @@ class LlamaAttentionMorph(nn.Module):
         else:
             past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
             attn_weights = attn_weights[:,:,-1:,...] # only attend to the last token
+        
+        # masking if needed
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
