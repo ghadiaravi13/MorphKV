@@ -204,7 +204,7 @@ def load_model_and_tokenizer(path, model_name, device, args):
                 warning_flag = False
                 break
         assert warning_flag==False, f"Transformers version {transformers_version} is not compatible with MorphKV. MorphKV is tested with Transformers version {version_list}. Please install this by: pip install transformers==4.45.0"
-        cache_dir = "/home/ravighadia/MorphKV/model_chkpts/"
+        cache_dir = "../model_chkpts/"
         os.makedirs(cache_dir, exist_ok=True)
 
         # Load the model and tokenizer

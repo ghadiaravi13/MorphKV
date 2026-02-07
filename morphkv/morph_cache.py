@@ -184,6 +184,42 @@ class DynamicCache(Cache):
         # new_size = sys.getsizeof(self.key_cache) + sys.getsizeof(self.value_cache) + sys.getsizeof(self.attn_cache)
         # print(f"cleared {100*(1-old_size/new_size)}% of KV Cache!\n")
     
+    def fuse_kv(self, headwise_bkts, max_capacity, layer_idx):
+        
+        final_fused_key_cache = []
+        final_fused_value_cache = []
+        
+        BS, NH, LEN, DIM = self.key_cache[layer_idx].shape
+        
+        for h in range(NH):
+            fused_key_cache = []
+            fused_value_cache = []
+            for bkt in headwise_bkts[h]:
+                fused_key_cache.append(self.key_cache[layer_idx][:, h:h+1, bkt, :].mean(dim=2, keepdim=True))
+                fused_value_cache.append(self.value_cache[layer_idx][:, h:h+1, bkt, :].mean(dim=2, keepdim=True))
+            
+            try:
+                pad_tokens = torch.zeros([BS, 1, max_capacity-len(headwise_bkts[h]), DIM], dtype=self.key_cache[layer_idx].dtype).to(self.key_cache[layer_idx].device)
+                fused_key_cache.append(pad_tokens)
+                fused_value_cache.append(pad_tokens)
+                final_fused_key_cache.append(torch.cat(fused_key_cache, dim=2)) # concat along the sequence length dimension
+                final_fused_value_cache.append(torch.cat(fused_value_cache, dim=2)) # concat along the sequence length dimension
+            except:
+                import pdb; pdb.set_trace()
+
+
+        try:
+            self.key_cache[layer_idx] = torch.cat(final_fused_key_cache, dim=1) # concat along the head dimension
+            self.value_cache[layer_idx] = torch.cat(final_fused_value_cache, dim=1) # concat along the head dimension
+        except Exception as e:
+            print(e)
+            import pdb; pdb.set_trace()
+        
+        if layer_idx==0:
+            # import pdb; pdb.set_trace()
+            if self.key_cache[layer_idx] != []: self.cache_size['key'] = max(self.cache_size['key'],self.key_cache[layer_idx].shape[2])
+            if self.value_cache[layer_idx] != []: self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2])
+    
     def update_win_queries(self, win_queries, layer_idx):
         if(self.query_cache[layer_idx]==[]):
             self.query_cache[layer_idx] = win_queries
