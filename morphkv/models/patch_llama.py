@@ -211,6 +211,7 @@ class LlamaAttentionMorph(nn.Module):
             self.MAX_CAPACITY = int(config.morphkv['max_capacity'])
             self.morph_type = config.morphkv['morph_type'] 
             self.evict_after = config.morphkv['evict_after'] #for bursty eviction during generation, we evict only after cache is > max_capacity * evict_after (say, after every 10 tokens)
+            self.fuse_temperature = float(config.morphkv.get('fuse_temperature', 1.0))
             self.window_queries = [None]*self.config.num_hidden_layers
             self.prefill_flag = True
     
@@ -262,64 +263,252 @@ class LlamaAttentionMorph(nn.Module):
 
         return scores[:,:,-1:,:], init_mask_attn
     
+    @staticmethod
+    def _finalize_bucket(tokens, token_scores, out_bkts, out_scores, out_wts):
+        """Normalize bucket scores and append the finalized bucket to output lists.
+
+        Args:
+            tokens:       List of token indices in this bucket.
+            token_scores: Corresponding raw importance scores.
+            out_bkts:     Accumulator list — bucket index lists.
+            out_scores:   Accumulator list — normalized score lists.
+            out_wts:      Accumulator list — bucket sizes (floats).
+        """
+        total = sum(token_scores)
+        if total > 0:
+            normalized = [s / total for s in token_scores]
+        else:
+            # Uniform weights when all scores are zero
+            n = len(token_scores)
+            normalized = [1.0 / n] * n
+
+        out_bkts.append(list(tokens))
+        out_scores.append(normalized)
+        out_wts.append(float(len(tokens)))
+
     def morphkv_plus_fuse(self, scores, past_key_value, key_heads, query_heads):
-        # bucketize scores in B contiguous buckets such that sum of scores in each bucket is as similar as possible
-        start_idx = 0
-        useful_scores = scores[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)]
-        bs, num_q_heads, win_q_len, k_len = useful_scores.shape
-        useful_scores_acc_head = useful_scores.view(bs, key_heads, -1, win_q_len, k_len).sum(dim=2)
-        useful_scores_acc_head_acc_window = useful_scores_acc_head.sum(dim=2, keepdim=True)
-        # sm_scores = nn.functional.softmax(useful_scores_acc_head_acc_window,dim=-1)
+        """Compress the KV cache via attention-score-guided balanced-mass partitioning.
 
-        temperature = 0.2
-        sm_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)]/temperature,dim=-1).mean(dim=2, keepdim=True)
-        sm_scores = sm_scores.view(sm_scores.shape[0],key_heads,-1,sm_scores.shape[2],sm_scores.shape[3]).max(dim=2)[0] # max reduction over heads
-        
+        Pre-window tokens are greedily partitioned into contiguous buckets whose
+        cumulative attention mass is approximately equal.  Each bucket's K/V
+        vectors are then fused via score-weighted averaging (in ``fuse_kv``).
+        Window and current tokens are preserved as singleton buckets.
+
+        A log(bucket_size) offset is returned so the caller can correct the
+        attention logits after fusion: ``softmax(z + log(N)) = N · softmax(z)``.
+
+        Args:
+            scores:         Raw attention logits  [bs, query_heads, seq_len, seq_len].
+            past_key_value: KV cache object with a ``fuse_kv()`` method.
+            key_heads:      Number of KV heads (may differ from *query_heads* under GQA).
+            query_heads:    Number of query attention heads.
+
+        Returns:
+            attn_logit_offsets: Tensor of shape [1, query_heads, 1, MAX_CAPACITY].
+        """
+        # Budget for pre-window buckets.  The remaining MAX_CAPACITY slots hold
+        # WIN_SIZE window tokens + 1 current token (each kept as a singleton).
+        num_fused_slots = self.MAX_CAPACITY - self.WIN_SIZE - 1
+        total_fused_len = self.MAX_CAPACITY  # num_fused_slots + WIN_SIZE + 1
+
+        # ---- 1. Per-KV-head importance scores --------------------------------
+        # For GQA: max-reduce query heads within each KV group.
+        scores_per_kv = (
+            scores
+            .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
+            .max(dim=2)[0]
+        )  # [bs, key_heads, seq_len, seq_len]
+
+        # Window-queries → past-keys slice, softmax, average over window queries.
+        past_attn = scores_per_kv[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)]
+        num_past = past_attn.shape[-1]
+        importance = nn.functional.softmax(past_attn / self.fuse_temperature, dim=-1).mean(dim=2, keepdim=True)
+        # importance shape: [bs, key_heads, 1, num_past]
+
+        total_seq_len = scores.shape[-1]
+
+        # ---- 2. Per-head greedy balanced-mass partitioning --------------------
         headwise_bkts = []
+        headwise_bkt_scores = []
         headwise_bkt_wts = []
-        B = self.MAX_CAPACITY
 
-        # import pdb; pdb.set_trace()
-        
         for h in range(key_heads):
-            
-            acc = 0
-            b = 0
-            bkts = []
-            curr_sum = 0
-            curr_bucket = []
-            curr_bkt_wts = []
-            
-            for i in range(k_len-1,0,-1): # start from the last token and go backwards to avoid accumulation for recent tokens
-            
-                curr_sum += sm_scores[:, h, :, i].item()
-                acc += curr_sum
-                curr_bucket.append(i)
-            
-                if(curr_sum > (1-acc)/(B-b)):
-                    curr_sum = 0
-                    bkts.append(curr_bucket)
-                    curr_bkt_wts.append(len(curr_bucket))
-                    b += 1
-                    curr_bucket = []
+            # 2a — Singleton buckets for window + current tokens (preserved as-is)
+            singleton_bkts = [[idx] for idx in range(num_past, total_seq_len)]
+            singleton_scores = [[1.0] for _ in singleton_bkts]
+            num_singletons = len(singleton_bkts)  # WIN_SIZE + 1
 
-                    if b == B-1: # last bucket, add all remaining tokens
-                        curr_bucket = range(i, k_len)
-                        bkts.append(curr_bucket)
-                        curr_bkt_wts.append(len(curr_bucket))
+            # 2b — Partition pre-window tokens into num_fused_slots buckets
+            past_bkts = []
+            past_bkt_scores = []
+            past_bkt_wts = []
+
+            total_mass = 0.0
+            curr_mass = 0.0
+            curr_toks = []
+            curr_tok_scores = []
+            num_finalized = 0
+
+            # Iterate from most-recent pre-window token → oldest
+            for i in range(num_past - 1, -1, -1):
+                tok_score = importance[:, h, :, i].item()
+                curr_mass += tok_score
+                total_mass += tok_score
+                curr_toks.append(i)
+                curr_tok_scores.append(tok_score)
+
+                remaining_mass = max(0.0, 1.0 - total_mass)
+                remaining_slots = num_fused_slots - num_finalized
+
+                if remaining_slots <= 0:
+                    break
+
+                should_split = curr_mass > remaining_mass / remaining_slots
+                is_last_slot = (num_finalized == num_fused_slots - 1)
+
+                if should_split:
+                    # Last slot: absorb all remaining (older) tokens into this bucket
+                    if is_last_slot and i > 0:
+                        for j in range(i - 1, -1, -1):
+                            sc = importance[:, h, :, j].item()
+                            curr_toks.append(j)
+                            curr_tok_scores.append(sc)
+
+                    self._finalize_bucket(
+                        curr_toks, curr_tok_scores,
+                        past_bkts, past_bkt_scores, past_bkt_wts,
+                    )
+                    num_finalized += 1
+                    curr_toks, curr_tok_scores, curr_mass = [], [], 0.0
+
+                    if is_last_slot:
                         break
-            
-            headwise_bkts.append(bkts[::-1]) # reverse the bucket list to get the tokens in the correct order
-            
-            if len(curr_bkt_wts) < B: # if we couldn't fill all buckets, fill the remaining entries with 1
-                curr_bkt_wts.extend([1]*(B-len(curr_bkt_wts)))
-            for g in range(query_heads//key_heads):
-                headwise_bkt_wts.append(curr_bkt_wts) 
-        
-        past_key_value.fuse_kv(headwise_bkts, self.MAX_CAPACITY, self.layer_idx)
 
-        attn_logit_offsets = torch.log(torch.tensor(headwise_bkt_wts, dtype=torch.float32, device=scores.device))
-        attn_logit_offsets = attn_logit_offsets.view(1, query_heads, 1, B)
+            # Flush any tokens that remain after the loop (fewer splits than slots)
+            if curr_toks:
+                self._finalize_bucket(
+                    curr_toks, curr_tok_scores,
+                    past_bkts, past_bkt_scores, past_bkt_wts,
+                )
+
+            # Reverse to chronological order (oldest bucket first)
+            past_bkts.reverse()
+            past_bkt_scores.reverse()
+            past_bkt_wts.reverse()
+
+            # Left-pad weights with 1.0 if fewer buckets than slots
+            pad = num_fused_slots - len(past_bkt_wts)
+            if pad > 0:
+                past_bkt_wts = [1.0] * pad + past_bkt_wts
+
+            # Combine: [pre-window buckets | window singletons | current singleton]
+            all_bkts = past_bkts + singleton_bkts
+            all_scores = past_bkt_scores + singleton_scores
+            all_wts = past_bkt_wts + [1.0] * num_singletons
+
+            headwise_bkts.append(all_bkts)
+            headwise_bkt_scores.append(all_scores)
+
+            # Replicate weights for every query head that shares this KV head
+            assert len(all_wts) == total_fused_len, (
+                f"Expected {total_fused_len} bucket weights, got {len(all_wts)} "
+                f"(head={h}, finalized={num_finalized}, pad={pad})"
+            )
+            for _ in range(query_heads // key_heads):
+                headwise_bkt_wts.append(all_wts)
+
+        # ---- 3. Fuse KV cache entries ----------------------------------------
+        past_key_value.fuse_kv(
+            headwise_bkts, headwise_bkt_scores, self.MAX_CAPACITY, self.layer_idx
+        )
+
+        # ---- 4. Log-correction offsets ---------------------------------------
+        # log(bucket_size) compensates logits: softmax(z + log(N)) = N · softmax(z)
+        attn_logit_offsets = torch.log(
+            torch.tensor(headwise_bkt_wts, dtype=torch.float32, device=scores.device)
+        ).view(1, query_heads, 1, total_fused_len)
+
+        return attn_logit_offsets
+
+    def morphkv_plus_fuse_eff(self, scores, past_key_value, key_heads, query_heads):
+        """Vectorized KV cache compression via cumsum-based equal-mass partitioning.
+
+        Functionally equivalent to ``morphkv_plus_fuse`` but replaces all
+        Python-level loops and per-token ``.item()`` calls with batched
+        tensor operations (cumsum, scatter_add), yielding a large speedup
+        on GPU for long sequences.
+
+        The greedy balanced-mass partition is approximated by placing bucket
+        boundaries at equal-mass intervals of the cumulative importance
+        distribution.  Each bucket's K/V vectors are fused via importance-
+        weighted averaging through ``fuse_kv_eff``.
+
+        Args:
+            scores:         Raw attention logits  [bs, query_heads, seq_len, seq_len].
+            past_key_value: KV cache object with a ``fuse_kv_eff()`` method.
+            key_heads:      Number of KV heads (may differ from *query_heads* under GQA).
+            query_heads:    Number of query attention heads.
+
+        Returns:
+            attn_logit_offsets: Tensor of shape [bs, query_heads, 1, MAX_CAPACITY].
+        """
+        num_fused_slots = self.MAX_CAPACITY - self.WIN_SIZE - 1
+        total_fused_len = self.MAX_CAPACITY
+
+        # ---- 1. Per-KV-head importance scores --------------------------------
+        # For GQA: max-reduce query heads within each KV group.
+        scores_per_kv = (
+            scores
+            .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
+            .max(dim=2)[0]
+        )  # [bs, key_heads, seq_len, seq_len]
+
+        # Window-queries → past-keys slice, softmax, average over window queries.
+        past_attn = scores_per_kv[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)]
+        num_past = past_attn.shape[-1]
+        importance = nn.functional.softmax(past_attn / self.fuse_temperature, dim=-1).mean(dim=2)
+        # importance: [bs, key_heads, num_past]
+
+        # ---- 2. Vectorized equal-mass partitioning via cumulative sum --------
+        # Cumulative importance from oldest to newest token.
+        cs = torch.cumsum(importance, dim=-1)        # [bs, key_heads, num_past]
+        total_mass = cs[..., -1:].clamp(min=1e-8)   # [bs, key_heads, 1]
+
+        # Assign each token to a bucket: bucket_id = floor(cdf * S), clamped.
+        bucket_ids = (cs * num_fused_slots / total_mass).long().clamp(0, num_fused_slots - 1)
+        # bucket_ids: [bs, key_heads, num_past]  — contiguous, non-decreasing
+
+        # ---- 3. Fuse KV cache entries via scatter-add ------------------------
+        past_key_value.fuse_kv_eff(
+            bucket_ids, importance, num_fused_slots, self.layer_idx,
+        )
+
+        # ---- 4. Log-correction offsets: log(bucket_size) --------------------
+        bs = scores.shape[0]
+        device = scores.device
+
+        bucket_sizes = torch.zeros(
+            bs, key_heads, num_fused_slots, device=device, dtype=torch.float32,
+        )
+        bucket_sizes.scatter_add_(
+            2, bucket_ids,
+            torch.ones(bs, key_heads, num_past, device=device, dtype=torch.float32),
+        )
+        bucket_sizes.clamp_(min=1.0)   # log(1) = 0 for empty / padded buckets
+
+        singleton_sizes = torch.ones(
+            bs, key_heads, self.WIN_SIZE + 1, device=device, dtype=torch.float32,
+        )
+        all_sizes = torch.cat([bucket_sizes, singleton_sizes], dim=-1)
+        # all_sizes: [bs, key_heads, MAX_CAPACITY]
+
+        # Replicate for GQA: expand each KV head's sizes to its query-head group
+        all_sizes = all_sizes.repeat_interleave(query_heads // key_heads, dim=1)
+        # [bs, query_heads, MAX_CAPACITY]
+
+        attn_logit_offsets = torch.log(all_sizes).unsqueeze(2)
+        # [bs, query_heads, 1, MAX_CAPACITY]
+
         return attn_logit_offsets
 
     def forward(
@@ -397,7 +586,7 @@ class LlamaAttentionMorph(nn.Module):
             if hidden_states.shape[1]==1:
                 causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] if attention_mask is not None else None
                 # attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
-                attn_logit_offsets = self.morphkv_plus_fuse(attn_weights, past_key_value, key_heads, query_heads)
+                attn_logit_offsets = self.morphkv_plus_fuse_eff(attn_weights, past_key_value, key_heads, query_heads)
                 
                 key_states = past_key_value.key_cache[self.layer_idx]
                 value_states = past_key_value.value_cache[self.layer_idx]

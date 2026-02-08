@@ -184,42 +184,117 @@ class DynamicCache(Cache):
         # new_size = sys.getsizeof(self.key_cache) + sys.getsizeof(self.value_cache) + sys.getsizeof(self.attn_cache)
         # print(f"cleared {100*(1-old_size/new_size)}% of KV Cache!\n")
     
-    def fuse_kv(self, headwise_bkts, max_capacity, layer_idx):
-        
-        final_fused_key_cache = []
-        final_fused_value_cache = []
-        
-        BS, NH, LEN, DIM = self.key_cache[layer_idx].shape
-        
-        for h in range(NH):
-            fused_key_cache = []
-            fused_value_cache = []
-            for bkt in headwise_bkts[h]:
-                fused_key_cache.append(self.key_cache[layer_idx][:, h:h+1, bkt, :].mean(dim=2, keepdim=True))
-                fused_value_cache.append(self.value_cache[layer_idx][:, h:h+1, bkt, :].mean(dim=2, keepdim=True))
-            
-            try:
-                pad_tokens = torch.zeros([BS, 1, max_capacity-len(headwise_bkts[h]), DIM], dtype=self.key_cache[layer_idx].dtype).to(self.key_cache[layer_idx].device)
-                fused_key_cache.append(pad_tokens)
-                fused_value_cache.append(pad_tokens)
-                final_fused_key_cache.append(torch.cat(fused_key_cache, dim=2)) # concat along the sequence length dimension
-                final_fused_value_cache.append(torch.cat(fused_value_cache, dim=2)) # concat along the sequence length dimension
-            except:
-                import pdb; pdb.set_trace()
+    def fuse_kv(self, headwise_bkts, headwise_bkt_scores, max_capacity, layer_idx):
+        """Fuse KV cache entries according to bucket assignments.
 
+        For each KV head, each bucket's K/V vectors are combined via
+        score-weighted summation into a single fused entry.  The result
+        is left-padded with zeros to reach *max_capacity* length and
+        written back into the cache.
 
-        try:
-            self.key_cache[layer_idx] = torch.cat(final_fused_key_cache, dim=1) # concat along the head dimension
-            self.value_cache[layer_idx] = torch.cat(final_fused_value_cache, dim=1) # concat along the head dimension
-        except Exception as e:
-            print(e)
-            import pdb; pdb.set_trace()
-        
-        if layer_idx==0:
-            # import pdb; pdb.set_trace()
-            if self.key_cache[layer_idx] != []: self.cache_size['key'] = max(self.cache_size['key'],self.key_cache[layer_idx].shape[2])
-            if self.value_cache[layer_idx] != []: self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2])
-    
+        Args:
+            headwise_bkts:       Per-head list of buckets (each bucket is
+                                 a list of token indices).
+            headwise_bkt_scores: Per-head list of normalized score lists
+                                 (same structure as *headwise_bkts*).
+            max_capacity:        Target sequence length after fusion.
+            layer_idx:           Transformer layer index.
+        """
+        key_cache = self.key_cache[layer_idx]
+        val_cache = self.value_cache[layer_idx]
+        dtype = key_cache.dtype
+        device = key_cache.device
+        bs, num_heads, _, head_dim = key_cache.shape
+
+        fused_keys_by_head = []
+        fused_vals_by_head = []
+
+        for h in range(num_heads):
+            buckets = headwise_bkts[h]
+            scores = headwise_bkt_scores[h]
+
+            head_keys = []
+            head_vals = []
+
+            for bkt_indices, bkt_weights in zip(buckets, scores):
+                weights = torch.tensor(
+                    bkt_weights, dtype=dtype, device=device,
+                ).view(1, 1, -1, 1)
+
+                fused_k = (key_cache[:, h:h+1, bkt_indices, :] * weights).sum(dim=2, keepdim=True)
+                fused_v = (val_cache[:, h:h+1, bkt_indices, :] * weights).sum(dim=2, keepdim=True)
+                head_keys.append(fused_k)
+                head_vals.append(fused_v)
+
+            # Left-pad to max_capacity
+            pad_len = max_capacity - len(buckets)
+            if pad_len > 0:
+                pad = torch.zeros(bs, 1, pad_len, head_dim, dtype=dtype, device=device)
+                head_keys.insert(0, pad)
+                head_vals.insert(0, pad)
+
+            fused_keys_by_head.append(torch.cat(head_keys, dim=2))
+            fused_vals_by_head.append(torch.cat(head_vals, dim=2))
+
+        self.key_cache[layer_idx] = torch.cat(fused_keys_by_head, dim=1)
+        self.value_cache[layer_idx] = torch.cat(fused_vals_by_head, dim=1)
+
+        # Track high-water mark for cache size reporting
+        if layer_idx == 0:
+            self.cache_size['key'] = max(self.cache_size['key'], self.key_cache[layer_idx].shape[2])
+            self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2])
+
+    def fuse_kv_eff(self, bucket_ids, importance, num_fused_slots, layer_idx):
+        """Vectorized KV cache fusion using scatter_add.
+
+        Replaces the Python-loop-based ``fuse_kv`` with a single batched
+        scatter-add operation over all heads simultaneously.
+
+        Args:
+            bucket_ids:      Integer bucket assignments [bs, num_heads, num_past].
+            importance:      Per-token importance weights [bs, num_heads, num_past].
+            num_fused_slots: Number of fused bucket slots (pre-window portion).
+            layer_idx:       Transformer layer index.
+        """
+        key_cache = self.key_cache[layer_idx]
+        val_cache = self.value_cache[layer_idx]
+        dtype = key_cache.dtype
+        device = key_cache.device
+        bs, num_heads, seq_len, head_dim = key_cache.shape
+
+        num_past = bucket_ids.shape[-1]
+        past_keys = key_cache[:, :, :num_past, :]
+        past_vals = val_cache[:, :, :num_past, :]
+        window_keys = key_cache[:, :, num_past:, :]   # WIN_SIZE + 1 tokens
+        window_vals = val_cache[:, :, num_past:, :]
+
+        # Per-bucket importance mass for normalization
+        bucket_mass = torch.zeros(
+            bs, num_heads, num_fused_slots, device=device, dtype=importance.dtype,
+        )
+        bucket_mass.scatter_add_(2, bucket_ids, importance)
+
+        # Normalized weights: importance[i] / bucket_mass[bucket_of_i]
+        weights = importance / bucket_mass.gather(2, bucket_ids).clamp(min=1e-8)
+        w = weights.unsqueeze(-1).to(dtype)  # [bs, num_heads, num_past, 1]
+
+        # Scatter-add weighted K/V into fused bucket slots
+        bkt_exp = bucket_ids.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        fused_keys = torch.zeros(bs, num_heads, num_fused_slots, head_dim, device=device, dtype=dtype)
+        fused_vals = torch.zeros(bs, num_heads, num_fused_slots, head_dim, device=device, dtype=dtype)
+        fused_keys.scatter_add_(2, bkt_exp, past_keys * w)
+        fused_vals.scatter_add_(2, bkt_exp, past_vals * w)
+
+        # Write back compressed cache: [fused_buckets | window + current]
+        self.key_cache[layer_idx] = torch.cat([fused_keys, window_keys], dim=2)
+        self.value_cache[layer_idx] = torch.cat([fused_vals, window_vals], dim=2)
+
+        # Track high-water mark for cache size reporting
+        if layer_idx == 0:
+            new_len = self.key_cache[layer_idx].shape[2]
+            self.cache_size['key'] = max(self.cache_size['key'], new_len)
+            self.cache_size['value'] = max(self.cache_size['value'], new_len)
+
     def update_win_queries(self, win_queries, layer_idx):
         if(self.query_cache[layer_idx]==[]):
             self.query_cache[layer_idx] = win_queries
