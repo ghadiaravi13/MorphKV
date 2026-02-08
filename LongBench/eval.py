@@ -129,4 +129,6 @@ if __name__ == '__main__':
     else:
         out_path = f"{pred_path}/{args.model}/result.json"
     with open(out_path, "w") as f:
+        # sort scores by key
+        scores = dict(sorted(scores.items(), key=lambda x: x[0]))
         json.dump(scores, f, ensure_ascii=False, indent=4)

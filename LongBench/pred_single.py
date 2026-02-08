@@ -37,6 +37,7 @@ def parse_args(args=None):
     parser.add_argument("--evict_after", "-ea", type=float, default=1.0, help="Evict after exceeding this times the KV limit")
     parser.add_argument("--fuse_temperature", "-ft", type=float, default=1.0, help="Temperature for fuse")
     parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
+    parser.add_argument("--use_attn_offsets", action='store_true', help="Use attn offsets")
     return parser.parse_args(args)
 
 # This is the customized building prompt for chat models
@@ -221,7 +222,8 @@ def load_model_and_tokenizer(path, model_name, device, args):
             'morph_type': args.morph_type,
             'evict_after': args.evict_after,
             'max_capacity': args.max_capacity,
-            'fuse_temperature': args.fuse_temperature
+            'fuse_temperature': args.fuse_temperature,
+            'use_attn_offsets': args.use_attn_offsets
         }
         print(f"MorphKV is: {config.morphkv}")
         
@@ -278,22 +280,22 @@ if __name__ == '__main__':
             data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]
             if not os.path.exists(f"pred_mem/{model_name}"):
                 os.makedirs(f"pred_mem/{model_name}")
-            out_path = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
-            logfile = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
+            out_path = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
+            logfile = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
         elif args.e:
             # data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
             data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]
             if not os.path.exists(f"pred_e/{model_name}"):
                 os.makedirs(f"pred_e/{model_name}")
-            out_path = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
-            logfile = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
+            out_path = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
+            logfile = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
         else:
             # For .jsonl files (JSON Lines format):
             data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]#load_dataset('THUDM/LongBench', dataset, split='test')
             if not os.path.exists(f"{pred_path}/{model_name}"):
                 os.makedirs(f"{pred_path}/{model_name}")
-            out_path = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
-            logfile = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
+            out_path = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
+            logfile = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
         data_all = [data_sample for data_sample in data]

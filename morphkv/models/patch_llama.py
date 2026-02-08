@@ -214,6 +214,7 @@ class LlamaAttentionMorph(nn.Module):
             self.fuse_temperature = float(config.morphkv.get('fuse_temperature', 1.0))
             self.window_queries = [None]*self.config.num_hidden_layers
             self.prefill_flag = True
+            self.use_attn_offsets = config.morphkv.get('use_attn_offsets', False)
     
 
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
@@ -584,7 +585,6 @@ class LlamaAttentionMorph(nn.Module):
         # use MorphKV only in generative phase, ie, when hidden states has 1 token (the newly generated)
         if self.config.morphkv and key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after:
             if hidden_states.shape[1]==1:
-                causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] if attention_mask is not None else None
                 # attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
                 attn_logit_offsets = self.morphkv_plus_fuse_eff(attn_weights, past_key_value, key_heads, query_heads)
                 
@@ -595,7 +595,8 @@ class LlamaAttentionMorph(nn.Module):
                     value_states = repeat_kv(value_states, self.num_key_value_groups)
                 recent_query = query_states[:,:,-1:,...]
                 attn_weights = torch.matmul(recent_query, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-                attn_weights = attn_weights + attn_logit_offsets
+                if self.use_attn_offsets:
+                    attn_weights = attn_weights + attn_logit_offsets
                 # import pdb; pdb.set_trace()
                 
                 
