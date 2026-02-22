@@ -55,7 +55,8 @@ class DynamicCache(Cache):
         self.max_capacity = torch.inf
         self.win_size = torch.inf
         self.prefill = False
-        self.fusion_done = False # first cleanup call should trigger fusion
+        self.fusion_done = [False for _ in range(num_hidden_layers)] # first cleanup call should trigger fusion
+        
     
     def set_max_capacity(self, max_capacity:int, win_size:int):
         self.max_capacity = max_capacity
@@ -110,7 +111,7 @@ class DynamicCache(Cache):
                 ##Efficient
                 assert BS==1, "Only supported for BS = 1 for now.\n"
 
-                if not self.fusion_done:
+                if not self.fusion_done[layer_idx]:
                     important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
                     non_important_indices = (init_mask.squeeze(2).reshape(-1)!=0).nonzero(as_tuple=True)[0]
 
@@ -135,7 +136,7 @@ class DynamicCache(Cache):
                 #self.value_cache[layer_idx] = self.value_cache[layer_idx][(init_mask==0).squeeze(2)].view(BS,NH,-1,DIM) #pick only the relevant indices along the seq_len axis (BS,num_heads,seq_len,hidden_dim)
 
                 # Efficient
-                if not self.fusion_done:
+                if not self.fusion_done[layer_idx]:
                     important_indices = (init_mask.squeeze(2).reshape(-1)==0).nonzero(as_tuple=True)[0]
                     non_important_indices = (init_mask.squeeze(2).reshape(-1)!=0).nonzero(as_tuple=True)[0]
 
@@ -146,7 +147,7 @@ class DynamicCache(Cache):
                     non_important_value_cache = non_important_value_cache.mean(dim=2, keepdim=True)
                     self.value_cache[layer_idx] = torch.cat([non_important_value_cache, important_value_cache], dim=2)
                     
-                    self.fusion_done = True # mark fusion as done, so that we don't need to fuse in further decode steps
+                    self.fusion_done[layer_idx] = True # mark fusion as done, so that we don't need to fuse in further decode steps
                     # self.value_cache[layer_idx] = torch.index_select(self.value_cache[layer_idx].view(BS,-1,DIM), dim=1, index=indices).view(BS,NH,-1,DIM)
 
                     del important_indices, non_important_indices, important_value_cache, non_important_value_cache
@@ -288,6 +289,81 @@ class DynamicCache(Cache):
         # Write back compressed cache: [fused_buckets | window + current]
         self.key_cache[layer_idx] = torch.cat([fused_keys, window_keys], dim=2)
         self.value_cache[layer_idx] = torch.cat([fused_vals, window_vals], dim=2)
+
+        # Track high-water mark for cache size reporting
+        if layer_idx == 0:
+            new_len = self.key_cache[layer_idx].shape[2]
+            self.cache_size['key'] = max(self.cache_size['key'], new_len)
+            self.cache_size['value'] = max(self.cache_size['value'], new_len)
+
+    def fuse_kv_eff_split(
+        self, important_idx, unimportant_idx, bucket_ids,
+        unimp_importance, num_fused_slots, layer_idx,
+    ):
+        """Vectorized KV cache fusion that preserves important tokens intact.
+
+        Important tokens are gathered as-is (singletons).  Unimportant tokens
+        are fused into ``num_fused_slots`` buckets via importance-weighted
+        scatter-add — the same mechanism as ``fuse_kv_eff``.
+
+        The resulting cache layout is:
+            [fused_buckets | important_singletons | window + current]
+
+        Args:
+            important_idx:    Positional indices of important past tokens
+                              [bs, num_heads, num_important], sorted ascending.
+            unimportant_idx:  Positional indices of unimportant past tokens
+                              [bs, num_heads, num_unimportant], sorted ascending.
+            bucket_ids:       Bucket assignments for unimportant tokens
+                              [bs, num_heads, num_unimportant].
+            unimp_importance: Importance weights for unimportant tokens
+                              [bs, num_heads, num_unimportant].
+            num_fused_slots:  Number of fused bucket slots.
+            layer_idx:        Transformer layer index.
+        """
+        key_cache = self.key_cache[layer_idx]
+        val_cache = self.value_cache[layer_idx]
+        dtype = key_cache.dtype
+        device = key_cache.device
+        bs, num_heads, seq_len, head_dim = key_cache.shape
+
+        num_past = important_idx.shape[-1] + unimportant_idx.shape[-1]
+        past_keys = key_cache[:, :, :num_past, :]
+        past_vals = val_cache[:, :, :num_past, :]
+        window_keys = key_cache[:, :, num_past:, :]   # WIN_SIZE + 1 tokens
+        window_vals = val_cache[:, :, num_past:, :]
+
+        # --- Important tokens: gather as-is (singletons) ---------------------
+        imp_exp = important_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        imp_keys = past_keys.gather(2, imp_exp)
+        imp_vals = past_vals.gather(2, imp_exp)
+
+        # --- Unimportant tokens: fuse via scatter-add -------------------------
+        unimp_exp = unimportant_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        unimp_keys = past_keys.gather(2, unimp_exp)
+        unimp_vals = past_vals.gather(2, unimp_exp)
+
+        # Per-bucket importance mass for normalization
+        bucket_mass = torch.zeros(
+            bs, num_heads, num_fused_slots, device=device, dtype=unimp_importance.dtype,
+        )
+        bucket_mass.scatter_add_(2, bucket_ids, unimp_importance)
+
+        # Normalized weights: importance[i] / bucket_mass[bucket_of_i]
+        weights = unimp_importance / bucket_mass.gather(2, bucket_ids).clamp(min=1e-8)
+        w = weights.unsqueeze(-1).to(dtype)  # [bs, num_heads, num_unimportant, 1]
+
+        bkt_exp = bucket_ids.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        fused_keys = torch.zeros(bs, num_heads, num_fused_slots, head_dim, device=device, dtype=dtype)
+        fused_vals = torch.zeros(bs, num_heads, num_fused_slots, head_dim, device=device, dtype=dtype)
+        fused_keys.scatter_add_(2, bkt_exp, unimp_keys * w)
+        fused_vals.scatter_add_(2, bkt_exp, unimp_vals * w)
+
+        # --- Concatenate: [fused | important | window + current] -------------
+        self.key_cache[layer_idx] = torch.cat([fused_keys, imp_keys, window_keys], dim=2)
+        self.value_cache[layer_idx] = torch.cat([fused_vals, imp_vals, window_vals], dim=2)
+
+        self.fusion_done[layer_idx] = True
 
         # Track high-water mark for cache size reporting
         if layer_idx == 0:

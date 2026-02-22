@@ -215,6 +215,7 @@ class LlamaAttentionMorph(nn.Module):
             self.window_queries = [None]*self.config.num_hidden_layers
             self.prefill_flag = True
             self.use_attn_offsets = config.morphkv.get('use_attn_offsets', False)
+            self.imp_budget = config.morphkv.get('imp_budget', 0.5)
     
 
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
@@ -512,6 +513,129 @@ class LlamaAttentionMorph(nn.Module):
 
         return attn_logit_offsets
 
+    def morphkv_plus_fuse_unimportant(self, scores, past_key_value, key_heads, query_heads):
+        """KV cache compression that preserves important tokens and only fuses the rest.
+
+        The top ``MAX_CAPACITY // 2`` most-important past tokens (per KV head)
+        are kept as-is — treated identically to window tokens.  Only the
+        remaining *unimportant* tokens undergo cumsum-based equal-mass
+        partitioning and weighted-average fusion.
+
+        Final cache layout (totals to MAX_CAPACITY):
+            [fused_buckets | important_singletons | window + current]
+
+        Args:
+            scores:         Raw attention logits  [bs, query_heads, seq_len, seq_len].
+            past_key_value: KV cache object with a ``fuse_kv_eff_split()`` method.
+            key_heads:      Number of KV heads (may differ from *query_heads* under GQA).
+            query_heads:    Number of query attention heads.
+
+        Returns:
+            attn_logit_offsets: Tensor of shape [bs, query_heads, 1, MAX_CAPACITY].
+                Log-correction for bucket sizes (gated by config flag).
+            zero_pad_offset:    Tensor of shape [bs, query_heads, 1, MAX_CAPACITY].
+                ``-inf`` for empty (zero-padded) fused-bucket slots, ``0``
+                elsewhere.  Always added to attention logits.
+        """
+        num_important = int(self.MAX_CAPACITY * self.imp_budget)
+        num_fused_slots = int((self.MAX_CAPACITY * (1 - self.imp_budget))) - self.WIN_SIZE - 1
+
+        # ---- 1. Per-KV-head importance scores --------------------------------
+        scores_per_kv = (
+            scores
+            .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
+            .max(dim=2)[0]
+        )  # [bs, key_heads, seq_len, seq_len]
+
+        past_attn = scores_per_kv[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)]
+        num_past = past_attn.shape[-1]
+        importance = nn.functional.softmax(past_attn / self.fuse_temperature, dim=-1).mean(dim=2)
+        # importance: [bs, key_heads, num_past]
+
+        # ---- 2. Identify top-K important tokens (kept as singletons) ---------
+        num_important = min(num_important, num_past)  # guard against short sequences
+        num_unimportant = num_past - num_important
+
+        _, important_idx = importance.topk(num_important, dim=-1, sorted=False)
+        important_idx, _ = important_idx.sort(dim=-1)  # preserve temporal order
+        # important_idx: [bs, key_heads, num_important]
+
+        # ---- 3. Extract unimportant tokens (sorted by position) --------------
+        _, unimportant_idx = importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
+        unimportant_idx, _ = unimportant_idx.sort(dim=-1)  # temporal order
+        # unimportant_idx: [bs, key_heads, num_unimportant]
+
+        unimp_importance = importance.gather(2, unimportant_idx)
+        # unimp_importance: [bs, key_heads, num_unimportant]
+
+        # ---- 4. Cumsum-based equal-mass partitioning on unimportant tokens ---
+        cs = torch.cumsum(unimp_importance, dim=-1)
+        total_mass = cs[..., -1:].clamp(min=1e-8)
+        bucket_ids = (cs * num_fused_slots / total_mass).long().clamp(0, num_fused_slots - 1)
+        # bucket_ids: [bs, key_heads, num_unimportant]
+
+        # ---- 5. Fuse KV cache (unimportant → scatter-add, important → as-is)
+        past_key_value.fuse_kv_eff_split(
+            important_idx, unimportant_idx, bucket_ids,
+            unimp_importance, num_fused_slots, self.layer_idx,
+        )
+
+        # ---- 6. Log-correction offsets: log(bucket_size) --------------------
+        bs = scores.shape[0]
+        device = scores.device
+
+        # Fused bucket sizes
+        bucket_sizes = torch.zeros(
+            bs, key_heads, num_fused_slots, device=device, dtype=torch.float32,
+        )
+        bucket_sizes.scatter_add_(
+            2, bucket_ids,
+            torch.ones(bs, key_heads, num_unimportant, device=device, dtype=torch.float32),
+        )
+
+        # Identify zero-padded (empty) fused-bucket slots *before* clamping
+        is_zero_pad = (bucket_sizes == 0)  # [bs, key_heads, num_fused_slots]
+
+        bucket_sizes.clamp_(min=1.0)   # safe for log: log(1) = 0 for empties
+
+        # Important singletons and window singletons all have size 1
+        important_sizes = torch.ones(
+            bs, key_heads, num_important, device=device, dtype=torch.float32,
+        )
+        window_sizes = torch.ones(
+            bs, key_heads, self.WIN_SIZE + 1, device=device, dtype=torch.float32,
+        )
+
+        all_sizes = torch.cat([bucket_sizes, important_sizes, window_sizes], dim=-1)
+        # all_sizes: [bs, key_heads, MAX_CAPACITY]
+
+        # Replicate for GQA
+        all_sizes = all_sizes.repeat_interleave(query_heads // key_heads, dim=1)
+        # [bs, query_heads, MAX_CAPACITY]
+
+        attn_logit_offsets = torch.log(all_sizes).unsqueeze(2)
+        # [bs, query_heads, 1, MAX_CAPACITY]
+
+        # ---- 7. Zero-pad offset: -inf for empty fused-bucket slots -----------
+        zero_pad_fused = torch.where(
+            is_zero_pad,
+            torch.tensor(float('-inf'), device=device, dtype=torch.float32),
+            torch.zeros(1, device=device, dtype=torch.float32),
+        )  # [bs, key_heads, num_fused_slots]
+
+        zero_pad_rest = torch.zeros(
+            bs, key_heads, num_important + self.WIN_SIZE + 1,
+            device=device, dtype=torch.float32,
+        )
+        zero_pad = torch.cat([zero_pad_fused, zero_pad_rest], dim=-1)
+        # [bs, key_heads, MAX_CAPACITY]
+
+        zero_pad = zero_pad.repeat_interleave(query_heads // key_heads, dim=1)
+        zero_pad_offset = zero_pad.unsqueeze(2)
+        # [bs, query_heads, 1, MAX_CAPACITY]
+
+        return attn_logit_offsets, zero_pad_offset
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -586,18 +710,21 @@ class LlamaAttentionMorph(nn.Module):
         if self.config.morphkv and key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after:
             if hidden_states.shape[1]==1:
                 # attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
-                attn_logit_offsets = self.morphkv_plus_fuse_eff(attn_weights, past_key_value, key_heads, query_heads)
-                
-                key_states = past_key_value.key_cache[self.layer_idx]
-                value_states = past_key_value.value_cache[self.layer_idx]
-                if key_states.shape[1]!=query_states.shape[1]:
-                    key_states = repeat_kv(key_states, self.num_key_value_groups)
-                    value_states = repeat_kv(value_states, self.num_key_value_groups)
-                recent_query = query_states[:,:,-1:,...]
-                attn_weights = torch.matmul(recent_query, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-                if self.use_attn_offsets:
-                    attn_weights = attn_weights + attn_logit_offsets
-                # import pdb; pdb.set_trace()
+                # attn_logit_offsets = self.morphkv_plus_fuse_eff(attn_weights, past_key_value, key_heads, query_heads)
+                if not past_key_value.fusion_done[self.layer_idx]:
+                    attn_logit_offsets, zero_pad_offset = self.morphkv_plus_fuse_unimportant(attn_weights, past_key_value, key_heads, query_heads)
+                    key_states = past_key_value.key_cache[self.layer_idx]
+                    value_states = past_key_value.value_cache[self.layer_idx]
+                    if key_states.shape[1]!=query_states.shape[1]:
+                        key_states = repeat_kv(key_states, self.num_key_value_groups)
+                        value_states = repeat_kv(value_states, self.num_key_value_groups)
+                    recent_query = query_states[:,:,-1:,...]
+                    attn_weights = torch.matmul(recent_query, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+                    attn_weights = attn_weights + zero_pad_offset  # always mask empty buckets
+                    if self.use_attn_offsets:
+                        attn_weights = attn_weights + attn_logit_offsets
+                else:
+                    attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
                 
                 
                 # morphkv call must have emptied KV Cache, so cleanup!

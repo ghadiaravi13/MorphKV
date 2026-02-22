@@ -38,6 +38,7 @@ def parse_args(args=None):
     parser.add_argument("--fuse_temperature", "-ft", type=float, default=1.0, help="Temperature for fuse")
     parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
     parser.add_argument("--use_attn_offsets", action='store_true', help="Use attn offsets")
+    parser.add_argument("--imp_budget", "-ib", type=float, default=0.5, help="Importance budget for morphkv")
     return parser.parse_args(args)
 
 # This is the customized building prompt for chat models
