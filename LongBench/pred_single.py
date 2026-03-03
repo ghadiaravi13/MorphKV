@@ -35,6 +35,7 @@ def parse_args(args=None):
     parser.add_argument("--window_size", "-ws", type=int, default=3, help="Window size for morphkv")
     parser.add_argument("--max_capacity", "-mc", type=float, default=100, help="Max cache capacity")
     parser.add_argument("--evict_after", "-ea", type=float, default=1.0, help="Evict after exceeding this times the KV limit")
+    
     parser.add_argument("--fuse_temperature", "-ft", type=float, default=1.0, help="Temperature for fuse")
     parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
     parser.add_argument("--use_attn_offsets", action='store_true', help="Use attn offsets")
@@ -224,7 +225,8 @@ def load_model_and_tokenizer(path, model_name, device, args):
             'evict_after': args.evict_after,
             'max_capacity': args.max_capacity,
             'fuse_temperature': args.fuse_temperature,
-            'use_attn_offsets': args.use_attn_offsets
+            'use_attn_offsets': args.use_attn_offsets,
+            'imp_budget': args.imp_budget
         }
         print(f"MorphKV is: {config.morphkv}")
         
@@ -285,7 +287,7 @@ if __name__ == '__main__':
             logfile = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
         elif args.e:
             # data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
-            data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]
+            data = [json.loads(line) for line in open(f"data/{dataset}_e.jsonl", "r")]
             if not os.path.exists(f"pred_e/{model_name}"):
                 os.makedirs(f"pred_e/{model_name}")
             out_path = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
