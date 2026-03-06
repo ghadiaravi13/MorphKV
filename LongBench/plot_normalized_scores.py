@@ -6,9 +6,11 @@ import os
 # --- Load data ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-with open(os.path.join(script_dir, "mkv_past_results", "mkv_default.json")) as f:
+with open("/home/rhg659/MorphKV/LongBench/mkv_results/mistral/result.json") as f:
     mkv_default = json.load(f)
-with open(os.path.join(script_dir, "mkv_fuse_unimp_ft_1.5_ib_0.5", "llama3.1-8b-instruct", "result.json")) as f:
+
+pred_path = "val_mag_scoring_ft_2.0_ib_0.8/mistral"
+with open(os.path.join(script_dir, pred_path, "result.json")) as f:
     mkv_plus = json.load(f)
 
 # --- Extract dataset short names and pair scores ---
@@ -16,7 +18,7 @@ with open(os.path.join(script_dir, "mkv_fuse_unimp_ft_1.5_ib_0.5", "llama3.1-8b-
 # MorphKV_plus key pattern:     {dataset}_ws32_mc2000.0_ft2.0_morphkv_True_type_sum_fused_lenNone
 
 DEFAULT_SUFFIX = "_ws32_mc2000.0_morphkv_True_type_sum_fused_lenNone"
-PLUS_SUFFIX = "_ws32_mc2000.0_ft1.5_ao_False_morphkv_True_type_sum_fused_lenNone"
+PLUS_SUFFIX = "_ws32_mc2000.0_ft2.0_ao_False_morphkv_True_type_unimp_sum_fused_lenNone"
 
 def extract_name(key, suffix):
     """Strip the known suffix to get the short dataset name."""
@@ -53,7 +55,7 @@ bars_default = ax.bar(
 )
 bars_plus = ax.bar(
     x + bar_width / 2, norm_plus, bar_width,
-    label="MorphKV+ (ft 1.5, ib 0.5)", color="#DD8452", edgecolor="white", linewidth=0.6
+    label="MorphKV+ (ft 2.0, ib 0.8)", color="#DD8452", edgecolor="white", linewidth=0.6
 )
 
 # Reference line at y = 1.0
@@ -68,7 +70,7 @@ for i, (bar, val) in enumerate(zip(bars_plus, norm_plus)):
 
 ax.set_xlabel("Dataset", fontsize=12)
 ax.set_ylabel("Normalized Score (MorphKV = 1.0)", fontsize=13)
-ax.set_title("MorphKV vs MorphKV+ — Normalized LongBench Scores (Llama 3.1-8B-Instruct)", fontsize=13)
+ax.set_title("MorphKV vs MorphKV+ — Normalized LongBench Scores (Mistral 7B)", fontsize=13)
 ax.set_xticks(x)
 ax.set_xticklabels(datasets, rotation=45, ha="right", fontsize=13)
 ax.legend(fontsize=10)
@@ -76,7 +78,7 @@ ax.set_ylim(0, max(norm_plus) + 0.3)
 
 plt.tight_layout()
 
-out_path = os.path.join(script_dir, "mkv_fuse_unimp_ft_1.5_ib_0.5", "normalized_scores.png")
+out_path = os.path.join(script_dir, pred_path, "normalized_scores.png")
 plt.savefig(out_path, dpi=200)
 print(f"Plot saved to {out_path}")
 plt.show()

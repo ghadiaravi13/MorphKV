@@ -164,6 +164,7 @@ class MistralAttentionMorph(nn.Module):
             self.prefill_flag = True
             self.use_attn_offsets = config.morphkv.get('use_attn_offsets', False)
             self.imp_budget = config.morphkv.get('imp_budget', 0.5)
+            self.pre_rope = config.morphkv.get('pre_rope', False)
     
 
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
@@ -332,6 +333,134 @@ class MistralAttentionMorph(nn.Module):
 
         return attn_logit_offsets, zero_pad_offset
 
+    def morphkv_plus_fuse_unimportant_prerope(self, scores, past_key_value, key_heads, query_heads):
+        """Like morphkv_plus_fuse_unimportant but inverts RoPE before fusion
+        and re-applies it with weighted-average bucket positions.
+
+        This avoids averaging post-RoPE key vectors whose positional
+        encodings would otherwise destructively interfere.  Instead:
+          1. Invert RoPE on the past keys (exact inverse rotation).
+          2. Fuse the pre-RoPE keys (same bucketization as the original).
+          3. Compute per-bucket weighted-average positions.
+          4. Re-apply RoPE with those positions.
+
+        Window tokens are left untouched (already correctly RoPE'd).
+        Return values are identical to ``morphkv_plus_fuse_unimportant``.
+        """
+        num_important = int(self.MAX_CAPACITY * self.imp_budget)
+        num_fused_slots = int((self.MAX_CAPACITY * (1 - self.imp_budget))) - self.WIN_SIZE - 1
+
+        # ---- 1. Per-KV-head importance scores (identical to original) --------
+        scores_per_kv = (
+            scores
+            .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
+            .max(dim=2)[0]
+        )
+
+        past_attn = scores_per_kv[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)]
+        num_past = past_attn.shape[-1]
+        importance = nn.functional.softmax(past_attn / self.fuse_temperature, dim=-1).mean(dim=2)
+
+        past_val_norms = past_key_value.value_cache[self.layer_idx][:, :, :num_past, :].norm(dim=-1)
+        importance = importance * past_val_norms
+
+        # ---- 2. Top-K important / bottom-K unimportant (identical) -----------
+        num_important = min(num_important, num_past)
+        num_unimportant = num_past - num_important
+
+        _, important_idx = importance.topk(num_important, dim=-1, sorted=False)
+        important_idx, _ = important_idx.sort(dim=-1)
+
+        _, unimportant_idx = importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
+        unimportant_idx, _ = unimportant_idx.sort(dim=-1)
+
+        unimp_importance = importance.gather(2, unimportant_idx)
+
+        # ---- 3. Cumsum equal-mass partitioning (identical) -------------------
+        cs = torch.cumsum(unimp_importance, dim=-1)
+        total_mass = cs[..., -1:].clamp(min=1e-8)
+        bucket_ids = (cs * num_fused_slots / total_mass).long().clamp(0, num_fused_slots - 1)
+
+        # ---- 4. Invert RoPE on past keys ------------------------------------
+        key_cache = past_key_value.key_cache[self.layer_idx]
+        bs = key_cache.shape[0]
+        num_kv_heads = key_cache.shape[1]
+        head_dim = key_cache.shape[3]
+        device = key_cache.device
+
+        past_keys = key_cache[:, :, :num_past, :]
+
+        past_positions = torch.arange(num_past, device=device).unsqueeze(0).expand(bs, -1)
+        cos_inv, sin_inv = self.rotary_emb(past_keys, past_positions)
+        # cos_inv, sin_inv: [bs, num_past, head_dim]
+
+        cos_inv = cos_inv.unsqueeze(1)  # [bs, 1, num_past, head_dim]
+        sin_inv = sin_inv.unsqueeze(1)
+        pre_rope_past_keys = past_keys * cos_inv - rotate_half(past_keys) * sin_inv
+
+        # ---- 5. Fuse pre-RoPE keys + values, get positions ------------------
+        fused_pre_rope_keys, all_positions = past_key_value.fuse_kv_eff_split_prerope(
+            important_idx, unimportant_idx, bucket_ids,
+            unimp_importance, num_fused_slots, self.layer_idx,
+            pre_rope_past_keys,
+        )
+        # fused_pre_rope_keys: [bs, num_kv_heads, num_fused+num_imp, head_dim]
+        # all_positions:       [bs, num_kv_heads, num_fused+num_imp]
+
+        # ---- 6. Re-apply RoPE with per-head positions -----------------------
+        num_compressed = fused_pre_rope_keys.shape[2]
+        flat_keys = fused_pre_rope_keys.reshape(bs * num_kv_heads, num_compressed, head_dim)
+        flat_pos = all_positions.reshape(bs * num_kv_heads, num_compressed)
+
+        cos_new, sin_new = self.rotary_emb(flat_keys, flat_pos)
+        roped_keys = flat_keys * cos_new + rotate_half(flat_keys) * sin_new
+        roped_keys = roped_keys.reshape(bs, num_kv_heads, num_compressed, head_dim)
+
+        window_keys = key_cache[:, :, num_past:, :]
+        past_key_value.key_cache[self.layer_idx] = torch.cat([roped_keys, window_keys], dim=2)
+
+        # ---- 7. Log-correction offsets (identical to original) ---------------
+        bucket_sizes = torch.zeros(
+            bs, key_heads, num_fused_slots, device=device, dtype=torch.float32,
+        )
+        bucket_sizes.scatter_add_(
+            2, bucket_ids,
+            torch.ones(bs, key_heads, num_unimportant, device=device, dtype=torch.float32),
+        )
+
+        is_zero_pad = (bucket_sizes == 0)
+        bucket_sizes.clamp_(min=1.0)
+
+        important_sizes = torch.ones(
+            bs, key_heads, num_important, device=device, dtype=torch.float32,
+        )
+        window_sizes = torch.ones(
+            bs, key_heads, self.WIN_SIZE + 1, device=device, dtype=torch.float32,
+        )
+
+        all_sizes = torch.cat([bucket_sizes, important_sizes, window_sizes], dim=-1)
+        all_sizes = all_sizes.repeat_interleave(query_heads // key_heads, dim=1)
+
+        attn_logit_offsets = torch.log(all_sizes).unsqueeze(2)
+
+        # ---- 8. Zero-pad offset (identical to original) ----------------------
+        zero_pad_fused = torch.where(
+            is_zero_pad,
+            torch.tensor(float('-inf'), device=device, dtype=torch.float32),
+            torch.zeros(1, device=device, dtype=torch.float32),
+        )
+
+        zero_pad_rest = torch.zeros(
+            bs, key_heads, num_important + self.WIN_SIZE + 1,
+            device=device, dtype=torch.float32,
+        )
+        zero_pad = torch.cat([zero_pad_fused, zero_pad_rest], dim=-1)
+
+        zero_pad = zero_pad.repeat_interleave(query_heads // key_heads, dim=1)
+        zero_pad_offset = zero_pad.unsqueeze(2)
+
+        return attn_logit_offsets, zero_pad_offset
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -382,7 +511,10 @@ class MistralAttentionMorph(nn.Module):
                     attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
                 else:
                     if not past_key_value.fusion_done[self.layer_idx]:
-                        attn_logit_offsets, zero_pad_offset = self.morphkv_plus_fuse_unimportant(attn_weights, past_key_value, key_heads, query_heads)
+                        if self.pre_rope:
+                            attn_logit_offsets, zero_pad_offset = self.morphkv_plus_fuse_unimportant_prerope(attn_weights, past_key_value, key_heads, query_heads)
+                        else:
+                            attn_logit_offsets, zero_pad_offset = self.morphkv_plus_fuse_unimportant(attn_weights, past_key_value, key_heads, query_heads)
                         key_states = past_key_value.key_cache[self.layer_idx]
                         value_states = past_key_value.value_cache[self.layer_idx]
                         if key_states.shape[1]!=query_states.shape[1]:
