@@ -296,92 +296,49 @@ class DynamicCache(Cache):
             self.cache_size['key'] = max(self.cache_size['key'], new_len)
             self.cache_size['value'] = max(self.cache_size['value'], new_len)
 
-    def fuse_kv_eff_split_prerope(
-        self, important_idx, unimportant_idx, bucket_ids,
-        unimp_importance, num_fused_slots, layer_idx,
-        pre_rope_past_keys, num_past=None,
+    def fuse_kv_hierarchical(
+        self, fused_keys, fused_vals, important_idx, num_past, layer_idx,
     ):
-        """Fuse pre-RoPE keys and values, compute weighted-average positions.
+        """Assemble compressed cache from pre-fused island keys/values and
+        important singletons.
 
-        The caller inverts RoPE on past keys before calling this method.
-        This method fuses the pre-RoPE keys and values identically to
-        ``fuse_kv_eff_split``, but instead of storing keys it returns them
-        along with per-head positions so the caller can re-apply RoPE.
-
-        Values (which have no RoPE) are fused and stored normally.
+        The caller has already performed island detection, fusion, and
+        selection.  This method gathers the important singletons from the
+        existing cache, concatenates everything into the final layout
+        ``[fused_islands | important | window]``, and updates bookkeeping.
 
         Args:
-            important_idx, unimportant_idx, bucket_ids,
-            unimp_importance, num_fused_slots, layer_idx:
-                Same as ``fuse_kv_eff_split``.
-            pre_rope_past_keys: Pre-RoPE key vectors for the past
-                (non-window) tokens [bs, num_heads, num_past, head_dim].
-            num_past: Explicit number of past (non-window) tokens in the
-                cache.  When provided, overrides the default assumption that
-                ``important + unimportant`` fully partition the past tokens
-                (needed when a pre-filter drops some tokens before the
-                important/unimportant split).
-
-        Returns:
-            all_pre_rope_keys: Fused + important pre-RoPE keys
-                [bs, num_heads, num_fused_slots + num_important, head_dim].
-            all_positions: Per-head integer positions for the above keys
-                [bs, num_heads, num_fused_slots + num_important].
+            fused_keys:     Selected fused island keys
+                            [bs, num_heads, num_fused_slots, head_dim].
+            fused_vals:     Selected fused island values (same shape).
+            important_idx:  Positional indices of important past tokens
+                            [bs, num_heads, num_important], sorted ascending.
+            num_past:       Number of past (non-window) tokens in the cache
+                            before compression.
+            layer_idx:      Transformer layer index.
         """
+        key_cache = self.key_cache[layer_idx]
         val_cache = self.value_cache[layer_idx]
-        dtype = pre_rope_past_keys.dtype
-        device = pre_rope_past_keys.device
-        bs, num_heads, seq_len, head_dim = self.key_cache[layer_idx].shape
+        head_dim = key_cache.shape[3]
 
-        if num_past is None:
-            num_past = important_idx.shape[-1] + unimportant_idx.shape[-1]
+        past_keys = key_cache[:, :, :num_past, :]
         past_vals = val_cache[:, :, :num_past, :]
+        window_keys = key_cache[:, :, num_past:, :]
         window_vals = val_cache[:, :, num_past:, :]
 
-        # --- Important tokens: gather as-is ---
         imp_exp = important_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-        imp_keys = pre_rope_past_keys.gather(2, imp_exp)
+        imp_keys = past_keys.gather(2, imp_exp)
         imp_vals = past_vals.gather(2, imp_exp)
 
-        # --- Unimportant tokens: fuse via scatter-add ---
-        unimp_exp = unimportant_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-        unimp_keys = pre_rope_past_keys.gather(2, unimp_exp)
-        unimp_vals = past_vals.gather(2, unimp_exp)
-
-        bucket_mass = torch.zeros(
-            bs, num_heads, num_fused_slots, device=device, dtype=unimp_importance.dtype,
-        )
-        bucket_mass.scatter_add_(2, bucket_ids, unimp_importance)
-
-        weights = unimp_importance / bucket_mass.gather(2, bucket_ids).clamp(min=1e-8)
-        w = weights.unsqueeze(-1).to(dtype)
-
-        bkt_exp = bucket_ids.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-        fused_keys = torch.zeros(bs, num_heads, num_fused_slots, head_dim, device=device, dtype=dtype)
-        fused_vals = torch.zeros(bs, num_heads, num_fused_slots, head_dim, device=device, dtype=dtype)
-        fused_keys.scatter_add_(2, bkt_exp, unimp_keys * w)
-        fused_vals.scatter_add_(2, bkt_exp, unimp_vals * w)
-
-        # --- Weighted-average positions for fused buckets ---
-        weighted_pos = torch.zeros(bs, num_heads, num_fused_slots, device=device, dtype=torch.float32)
-        weighted_pos.scatter_add_(2, bucket_ids, weights * unimportant_idx.float())
-        bucket_positions = weighted_pos.round().long()
-
-        imp_positions = important_idx  # original cache positions
-
-        # --- Store fused values (no RoPE on values) ---
+        self.key_cache[layer_idx] = torch.cat([fused_keys, imp_keys, window_keys], dim=2)
         self.value_cache[layer_idx] = torch.cat([fused_vals, imp_vals, window_vals], dim=2)
 
         self.fusion_done[layer_idx] = True
 
         if layer_idx == 0:
-            new_len = self.value_cache[layer_idx].shape[2]
+            new_len = self.key_cache[layer_idx].shape[2]
             self.cache_size['key'] = max(self.cache_size['key'], new_len)
             self.cache_size['value'] = max(self.cache_size['value'], new_len)
-
-        all_pre_rope_keys = torch.cat([fused_keys, imp_keys], dim=2)
-        all_positions = torch.cat([bucket_positions, imp_positions], dim=-1)
-        return all_pre_rope_keys, all_positions
 
     def fuse_kv_eff_split(
         self, important_idx, unimportant_idx, bucket_ids,

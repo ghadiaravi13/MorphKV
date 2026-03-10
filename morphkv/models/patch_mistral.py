@@ -334,28 +334,28 @@ class MistralAttentionMorph(nn.Module):
 
         return attn_logit_offsets, zero_pad_offset
 
-    def morphkv_plus_fuse_unimportant_prerope(self, scores, past_key_value, key_heads, query_heads):
-        """Pre-RoPE fusion with aggregate-score percentile pre-filter.
+    def morphkv_hierarchical_cache(self, scores, past_key_value, key_heads, query_heads):
+        """Hierarchical KV cache compression with contiguous island fusion.
 
-        Before splitting tokens into important singletons and fused buckets,
-        a per-head percentile filter drops the least important tokens: for
-        each KV head, only the smallest set of tokens whose cumulative
-        importance reaches ``score_percentile`` of the head's total mass
-        survives.  The surviving tokens then go through the standard
-        important/unimportant split and pre-RoPE fusion pipeline.
+        After selecting important tokens, unimportant tokens form contiguous
+        islands (spans between important token positions).  Each island is
+        fused into a single representative via importance-weighted averaging
+        of post-RoPE keys and values.  Islands are scored by mean importance,
+        and the top-K islands are retained where K is the unimportant budget.
+
+        Final cache layout (totals to <= MAX_CAPACITY):
+            [selected_fused_islands | important_singletons | window + current]
 
         Pipeline:
           1. Compute per-KV-head importance (softmax attn × value norm).
-          2. Per-head percentile filter → survivors.
-          3. Split survivors into important singletons + unimportant tokens.
-          4. Cumsum equal-mass bucketing on unimportant survivors.
-          5. Invert RoPE on all past keys.
-          6. Fuse pre-RoPE keys/values, compute weighted-average positions.
-          7. Re-apply RoPE with per-head positions.
-          8. Log-correction and zero-pad offsets.
+          2. Select top-K important tokens as singletons.
+          3. Identify contiguous islands of unimportant tokens via cumsum.
+          4. Fuse each island via importance-weighted averaging (post-RoPE).
+          5. Score islands by mean importance; retain top-K islands.
+          6. Assemble compressed cache and compute zero-pad offsets.
         """
         num_important = int(self.MAX_CAPACITY * self.imp_budget)
-        num_fused_slots = int((self.MAX_CAPACITY * (1 - self.imp_budget))) - self.WIN_SIZE - 1
+        num_fused_slots = self.MAX_CAPACITY - self.WIN_SIZE - 1 - num_important
 
         # ---- 1. Per-KV-head importance scores --------------------------------
         scores_per_kv = (
@@ -372,114 +372,104 @@ class MistralAttentionMorph(nn.Module):
         importance = importance * past_val_norms
         # importance: [bs, key_heads, num_past]
 
-        # ---- 2. Per-head percentile filter -----------------------------------
-        sorted_imp, sorted_imp_idx = importance.sort(dim=-1, descending=True)
-        cumsum_imp = torch.cumsum(sorted_imp, dim=-1)
-        total_imp = cumsum_imp[..., -1:].clamp(min=1e-8)
+        # ---- 2. Select top-K important tokens --------------------------------
+        num_important = min(num_important, num_past)
+        num_unimportant = num_past - num_important
 
-        keep_mask = cumsum_imp <= self.score_percentile * total_imp
-        num_to_keep = (keep_mask.sum(dim=-1) + 1).clamp(max=num_past)
-        num_survivors = num_to_keep.max().item()
-
-        survivor_idx = sorted_imp_idx[:, :, :num_survivors]
-        survivor_idx, _ = survivor_idx.sort(dim=-1)
-        # survivor_idx: [bs, key_heads, num_survivors] — original cache positions
-
-        surv_importance = importance.gather(2, survivor_idx)
-
-        # ---- 3. Top-K important / bottom-K unimportant (within survivors) ----
-        num_important = min(num_important, num_survivors)
-        num_unimportant = num_survivors - num_important
-
-        _, imp_local = surv_importance.topk(num_important, dim=-1, sorted=False)
-        imp_local, _ = imp_local.sort(dim=-1)
-        important_idx = survivor_idx.gather(2, imp_local)
+        _, important_idx = importance.topk(num_important, dim=-1, sorted=False)
         important_idx, _ = important_idx.sort(dim=-1)
 
-        _, unimp_local = surv_importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
-        unimp_local, _ = unimp_local.sort(dim=-1)
-        unimportant_idx = survivor_idx.gather(2, unimp_local)
+        _, unimportant_idx = importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
         unimportant_idx, _ = unimportant_idx.sort(dim=-1)
+        unimp_importance = importance.gather(2, unimportant_idx)
 
-        unimp_importance = surv_importance.gather(2, unimp_local)
-
-        # ---- 4. Cumsum equal-mass partitioning -------------------------------
-        cs = torch.cumsum(unimp_importance, dim=-1)
-        total_mass = cs[..., -1:].clamp(min=1e-8)
-        bucket_ids = (cs * num_fused_slots / total_mass).long().clamp(0, num_fused_slots - 1)
-
-        # ---- 5. Invert RoPE on past keys ------------------------------------
+        # ---- 3. Identify contiguous islands of unimportant tokens ------------
         key_cache = past_key_value.key_cache[self.layer_idx]
         bs = key_cache.shape[0]
-        num_kv_heads = key_cache.shape[1]
         head_dim = key_cache.shape[3]
         device = key_cache.device
 
+        is_important = torch.zeros(bs, key_heads, num_past, device=device, dtype=torch.long)
+        is_important.scatter_(2, important_idx, 1)
+
+        island_ids_all = torch.cumsum(is_important, dim=-1)
+        unimp_island_ids = island_ids_all.gather(2, unimportant_idx)
+        max_islands = num_important + 1
+
+        # ---- 4. Fuse each island (post-RoPE weighted averaging) --------------
         past_keys = key_cache[:, :, :num_past, :]
+        past_vals = past_key_value.value_cache[self.layer_idx][:, :, :num_past, :]
 
-        past_positions = torch.arange(num_past, device=device).unsqueeze(0).expand(bs, -1)
-        cos_inv, sin_inv = self.rotary_emb(past_keys, past_positions)
+        unimp_exp = unimportant_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        unimp_keys = past_keys.gather(2, unimp_exp)
+        unimp_vals = past_vals.gather(2, unimp_exp)
 
-        cos_inv = cos_inv.unsqueeze(1)
-        sin_inv = sin_inv.unsqueeze(1)
-        pre_rope_past_keys = past_keys * cos_inv - rotate_half(past_keys) * sin_inv
+        island_mass = torch.zeros(bs, key_heads, max_islands, device=device, dtype=importance.dtype)
+        island_mass.scatter_add_(2, unimp_island_ids, unimp_importance)
 
-        # ---- 6. Fuse pre-RoPE keys + values, get positions ------------------
-        fused_pre_rope_keys, all_positions = past_key_value.fuse_kv_eff_split_prerope(
-            important_idx, unimportant_idx, bucket_ids,
-            unimp_importance, num_fused_slots, self.layer_idx,
-            pre_rope_past_keys, num_past=num_past,
-        )
+        weights = unimp_importance / island_mass.gather(2, unimp_island_ids).clamp(min=1e-8)
+        w = weights.unsqueeze(-1).to(past_keys.dtype)
 
-        # ---- 7. Re-apply RoPE with per-head positions -----------------------
-        num_compressed = fused_pre_rope_keys.shape[2]
-        flat_keys = fused_pre_rope_keys.reshape(bs * num_kv_heads, num_compressed, head_dim)
-        flat_pos = all_positions.reshape(bs * num_kv_heads, num_compressed)
+        bkt_exp = unimp_island_ids.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        fused_keys = torch.zeros(bs, key_heads, max_islands, head_dim, device=device, dtype=past_keys.dtype)
+        fused_vals = torch.zeros(bs, key_heads, max_islands, head_dim, device=device, dtype=past_vals.dtype)
+        fused_keys.scatter_add_(2, bkt_exp, unimp_keys * w)
+        fused_vals.scatter_add_(2, bkt_exp, unimp_vals * w)
 
-        cos_new, sin_new = self.rotary_emb(flat_keys, flat_pos)
-        roped_keys = flat_keys * cos_new + rotate_half(flat_keys) * sin_new
-        roped_keys = roped_keys.reshape(bs, num_kv_heads, num_compressed, head_dim)
-
-        window_keys = key_cache[:, :, num_past:, :]
-        past_key_value.key_cache[self.layer_idx] = torch.cat([roped_keys, window_keys], dim=2)
-
-        # ---- 8. Log-correction offsets ---------------------------------------
-        bucket_sizes = torch.zeros(
-            bs, key_heads, num_fused_slots, device=device, dtype=torch.float32,
-        )
-        bucket_sizes.scatter_add_(
-            2, bucket_ids,
+        # ---- 5. Score islands by mean importance, select top-K ---------------
+        island_counts = torch.zeros(bs, key_heads, max_islands, device=device, dtype=torch.float32)
+        island_counts.scatter_add_(
+            2, unimp_island_ids,
             torch.ones(bs, key_heads, num_unimportant, device=device, dtype=torch.float32),
         )
 
-        is_zero_pad = (bucket_sizes == 0)
-        bucket_sizes.clamp_(min=1.0)
+        island_scores = island_mass / island_counts.clamp(min=1)
+        island_scores = island_scores.masked_fill(island_counts == 0, float('-inf'))
 
-        important_sizes = torch.ones(
-            bs, key_heads, num_important, device=device, dtype=torch.float32,
+        K = min(num_fused_slots, max_islands)
+        _, top_island_idx = island_scores.topk(K, dim=-1, sorted=False)
+        top_island_idx, _ = top_island_idx.sort(dim=-1)
+
+        sel_exp = top_island_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        selected_fused_keys = fused_keys.gather(2, sel_exp)
+        selected_fused_vals = fused_vals.gather(2, sel_exp)
+        selected_sizes = island_counts.gather(2, top_island_idx)
+
+        if K < num_fused_slots:
+            pad_size = num_fused_slots - K
+            pad_kv = torch.zeros(bs, key_heads, pad_size, head_dim, device=device, dtype=past_keys.dtype)
+            selected_fused_keys = torch.cat([selected_fused_keys, pad_kv], dim=2)
+            selected_fused_vals = torch.cat([selected_fused_vals, pad_kv], dim=2)
+            selected_sizes = torch.cat([
+                selected_sizes,
+                torch.zeros(bs, key_heads, pad_size, device=device, dtype=torch.float32),
+            ], dim=2)
+
+        # ---- 6. Assemble compressed cache ------------------------------------
+        past_key_value.fuse_kv_hierarchical(
+            selected_fused_keys, selected_fused_vals,
+            important_idx, num_past, self.layer_idx,
         )
-        window_sizes = torch.ones(
-            bs, key_heads, self.WIN_SIZE + 1, device=device, dtype=torch.float32,
+
+        # ---- 7. Zero-pad offset (no log-correction) -------------------------
+        is_zero_pad = (selected_sizes == 0)
+
+        attn_logit_offsets = torch.zeros(
+            bs, key_heads, 1, num_fused_slots + num_important + self.WIN_SIZE + 1,
+            device=device, dtype=torch.float32,
         )
+        attn_logit_offsets = attn_logit_offsets.repeat_interleave(query_heads // key_heads, dim=1)
 
-        all_sizes = torch.cat([bucket_sizes, important_sizes, window_sizes], dim=-1)
-        all_sizes = all_sizes.repeat_interleave(query_heads // key_heads, dim=1)
-
-        attn_logit_offsets = torch.log(all_sizes).unsqueeze(2)
-
-        # ---- 9. Zero-pad offset ---------------------------------------------
         zero_pad_fused = torch.where(
             is_zero_pad,
             torch.tensor(float('-inf'), device=device, dtype=torch.float32),
             torch.zeros(1, device=device, dtype=torch.float32),
         )
-
         zero_pad_rest = torch.zeros(
             bs, key_heads, num_important + self.WIN_SIZE + 1,
             device=device, dtype=torch.float32,
         )
         zero_pad = torch.cat([zero_pad_fused, zero_pad_rest], dim=-1)
-
         zero_pad = zero_pad.repeat_interleave(query_heads // key_heads, dim=1)
         zero_pad_offset = zero_pad.unsqueeze(2)
 
@@ -536,7 +526,7 @@ class MistralAttentionMorph(nn.Module):
                 else:
                     if not past_key_value.fusion_done[self.layer_idx]:
                         if self.pre_rope:
-                            attn_logit_offsets, zero_pad_offset = self.morphkv_plus_fuse_unimportant_prerope(attn_weights, past_key_value, key_heads, query_heads)
+                            attn_logit_offsets, zero_pad_offset = self.morphkv_hierarchical_cache(attn_weights, past_key_value, key_heads, query_heads)
                         else:
                             attn_logit_offsets, zero_pad_offset = self.morphkv_plus_fuse_unimportant(attn_weights, past_key_value, key_heads, query_heads)
                         key_states = past_key_value.key_cache[self.layer_idx]
