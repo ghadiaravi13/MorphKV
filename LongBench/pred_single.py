@@ -41,6 +41,7 @@ def parse_args(args=None):
     parser.add_argument("--use_attn_offsets", action='store_true', help="Use attn offsets")
     parser.add_argument("--imp_budget", "-ib", type=float, default=0.5, help="Importance budget for morphkv")
     parser.add_argument("--pre_rope", "-pr", action='store_true', help="Use pre-rope for morphkv")
+    parser.add_argument("--score_percentile", "-sp", type=float, default=0.9, help="Score percentile for morphkv")
     return parser.parse_args(args)
 
 # This is the customized building prompt for chat models
@@ -228,7 +229,8 @@ def load_model_and_tokenizer(path, model_name, device, args):
             'fuse_temperature': args.fuse_temperature,
             'use_attn_offsets': args.use_attn_offsets,
             'imp_budget': args.imp_budget,
-            'pre_rope': args.pre_rope
+            'pre_rope': args.pre_rope,
+            'score_percentile': args.score_percentile
         }
         print(f"MorphKV is: {config.morphkv}")
         

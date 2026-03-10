@@ -165,6 +165,7 @@ class MistralAttentionMorph(nn.Module):
             self.use_attn_offsets = config.morphkv.get('use_attn_offsets', False)
             self.imp_budget = config.morphkv.get('imp_budget', 0.5)
             self.pre_rope = config.morphkv.get('pre_rope', False)
+            self.score_percentile = float(config.morphkv.get('score_percentile', 0.9))
     
 
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
@@ -334,23 +335,29 @@ class MistralAttentionMorph(nn.Module):
         return attn_logit_offsets, zero_pad_offset
 
     def morphkv_plus_fuse_unimportant_prerope(self, scores, past_key_value, key_heads, query_heads):
-        """Like morphkv_plus_fuse_unimportant but inverts RoPE before fusion
-        and re-applies it with weighted-average bucket positions.
+        """Pre-RoPE fusion with aggregate-score percentile pre-filter.
 
-        This avoids averaging post-RoPE key vectors whose positional
-        encodings would otherwise destructively interfere.  Instead:
-          1. Invert RoPE on the past keys (exact inverse rotation).
-          2. Fuse the pre-RoPE keys (same bucketization as the original).
-          3. Compute per-bucket weighted-average positions.
-          4. Re-apply RoPE with those positions.
+        Before splitting tokens into important singletons and fused buckets,
+        a per-head percentile filter drops the least important tokens: for
+        each KV head, only the smallest set of tokens whose cumulative
+        importance reaches ``score_percentile`` of the head's total mass
+        survives.  The surviving tokens then go through the standard
+        important/unimportant split and pre-RoPE fusion pipeline.
 
-        Window tokens are left untouched (already correctly RoPE'd).
-        Return values are identical to ``morphkv_plus_fuse_unimportant``.
+        Pipeline:
+          1. Compute per-KV-head importance (softmax attn × value norm).
+          2. Per-head percentile filter → survivors.
+          3. Split survivors into important singletons + unimportant tokens.
+          4. Cumsum equal-mass bucketing on unimportant survivors.
+          5. Invert RoPE on all past keys.
+          6. Fuse pre-RoPE keys/values, compute weighted-average positions.
+          7. Re-apply RoPE with per-head positions.
+          8. Log-correction and zero-pad offsets.
         """
         num_important = int(self.MAX_CAPACITY * self.imp_budget)
         num_fused_slots = int((self.MAX_CAPACITY * (1 - self.imp_budget))) - self.WIN_SIZE - 1
 
-        # ---- 1. Per-KV-head importance scores (identical to original) --------
+        # ---- 1. Per-KV-head importance scores --------------------------------
         scores_per_kv = (
             scores
             .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
@@ -363,25 +370,45 @@ class MistralAttentionMorph(nn.Module):
 
         past_val_norms = past_key_value.value_cache[self.layer_idx][:, :, :num_past, :].norm(dim=-1)
         importance = importance * past_val_norms
+        # importance: [bs, key_heads, num_past]
 
-        # ---- 2. Top-K important / bottom-K unimportant (identical) -----------
-        num_important = min(num_important, num_past)
-        num_unimportant = num_past - num_important
+        # ---- 2. Per-head percentile filter -----------------------------------
+        sorted_imp, sorted_imp_idx = importance.sort(dim=-1, descending=True)
+        cumsum_imp = torch.cumsum(sorted_imp, dim=-1)
+        total_imp = cumsum_imp[..., -1:].clamp(min=1e-8)
 
-        _, important_idx = importance.topk(num_important, dim=-1, sorted=False)
+        keep_mask = cumsum_imp <= self.score_percentile * total_imp
+        num_to_keep = (keep_mask.sum(dim=-1) + 1).clamp(max=num_past)
+        num_survivors = num_to_keep.max().item()
+
+        survivor_idx = sorted_imp_idx[:, :, :num_survivors]
+        survivor_idx, _ = survivor_idx.sort(dim=-1)
+        # survivor_idx: [bs, key_heads, num_survivors] — original cache positions
+
+        surv_importance = importance.gather(2, survivor_idx)
+
+        # ---- 3. Top-K important / bottom-K unimportant (within survivors) ----
+        num_important = min(num_important, num_survivors)
+        num_unimportant = num_survivors - num_important
+
+        _, imp_local = surv_importance.topk(num_important, dim=-1, sorted=False)
+        imp_local, _ = imp_local.sort(dim=-1)
+        important_idx = survivor_idx.gather(2, imp_local)
         important_idx, _ = important_idx.sort(dim=-1)
 
-        _, unimportant_idx = importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
+        _, unimp_local = surv_importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
+        unimp_local, _ = unimp_local.sort(dim=-1)
+        unimportant_idx = survivor_idx.gather(2, unimp_local)
         unimportant_idx, _ = unimportant_idx.sort(dim=-1)
 
-        unimp_importance = importance.gather(2, unimportant_idx)
+        unimp_importance = surv_importance.gather(2, unimp_local)
 
-        # ---- 3. Cumsum equal-mass partitioning (identical) -------------------
+        # ---- 4. Cumsum equal-mass partitioning -------------------------------
         cs = torch.cumsum(unimp_importance, dim=-1)
         total_mass = cs[..., -1:].clamp(min=1e-8)
         bucket_ids = (cs * num_fused_slots / total_mass).long().clamp(0, num_fused_slots - 1)
 
-        # ---- 4. Invert RoPE on past keys ------------------------------------
+        # ---- 5. Invert RoPE on past keys ------------------------------------
         key_cache = past_key_value.key_cache[self.layer_idx]
         bs = key_cache.shape[0]
         num_kv_heads = key_cache.shape[1]
@@ -392,22 +419,19 @@ class MistralAttentionMorph(nn.Module):
 
         past_positions = torch.arange(num_past, device=device).unsqueeze(0).expand(bs, -1)
         cos_inv, sin_inv = self.rotary_emb(past_keys, past_positions)
-        # cos_inv, sin_inv: [bs, num_past, head_dim]
 
-        cos_inv = cos_inv.unsqueeze(1)  # [bs, 1, num_past, head_dim]
+        cos_inv = cos_inv.unsqueeze(1)
         sin_inv = sin_inv.unsqueeze(1)
         pre_rope_past_keys = past_keys * cos_inv - rotate_half(past_keys) * sin_inv
 
-        # ---- 5. Fuse pre-RoPE keys + values, get positions ------------------
+        # ---- 6. Fuse pre-RoPE keys + values, get positions ------------------
         fused_pre_rope_keys, all_positions = past_key_value.fuse_kv_eff_split_prerope(
             important_idx, unimportant_idx, bucket_ids,
             unimp_importance, num_fused_slots, self.layer_idx,
-            pre_rope_past_keys,
+            pre_rope_past_keys, num_past=num_past,
         )
-        # fused_pre_rope_keys: [bs, num_kv_heads, num_fused+num_imp, head_dim]
-        # all_positions:       [bs, num_kv_heads, num_fused+num_imp]
 
-        # ---- 6. Re-apply RoPE with per-head positions -----------------------
+        # ---- 7. Re-apply RoPE with per-head positions -----------------------
         num_compressed = fused_pre_rope_keys.shape[2]
         flat_keys = fused_pre_rope_keys.reshape(bs * num_kv_heads, num_compressed, head_dim)
         flat_pos = all_positions.reshape(bs * num_kv_heads, num_compressed)
@@ -419,7 +443,7 @@ class MistralAttentionMorph(nn.Module):
         window_keys = key_cache[:, :, num_past:, :]
         past_key_value.key_cache[self.layer_idx] = torch.cat([roped_keys, window_keys], dim=2)
 
-        # ---- 7. Log-correction offsets (identical to original) ---------------
+        # ---- 8. Log-correction offsets ---------------------------------------
         bucket_sizes = torch.zeros(
             bs, key_heads, num_fused_slots, device=device, dtype=torch.float32,
         )
@@ -443,7 +467,7 @@ class MistralAttentionMorph(nn.Module):
 
         attn_logit_offsets = torch.log(all_sizes).unsqueeze(2)
 
-        # ---- 8. Zero-pad offset (identical to original) ----------------------
+        # ---- 9. Zero-pad offset ---------------------------------------------
         zero_pad_fused = torch.where(
             is_zero_pad,
             torch.tensor(float('-inf'), device=device, dtype=torch.float32),

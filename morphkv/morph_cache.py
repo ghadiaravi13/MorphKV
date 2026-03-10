@@ -299,7 +299,7 @@ class DynamicCache(Cache):
     def fuse_kv_eff_split_prerope(
         self, important_idx, unimportant_idx, bucket_ids,
         unimp_importance, num_fused_slots, layer_idx,
-        pre_rope_past_keys,
+        pre_rope_past_keys, num_past=None,
     ):
         """Fuse pre-RoPE keys and values, compute weighted-average positions.
 
@@ -316,6 +316,11 @@ class DynamicCache(Cache):
                 Same as ``fuse_kv_eff_split``.
             pre_rope_past_keys: Pre-RoPE key vectors for the past
                 (non-window) tokens [bs, num_heads, num_past, head_dim].
+            num_past: Explicit number of past (non-window) tokens in the
+                cache.  When provided, overrides the default assumption that
+                ``important + unimportant`` fully partition the past tokens
+                (needed when a pre-filter drops some tokens before the
+                important/unimportant split).
 
         Returns:
             all_pre_rope_keys: Fused + important pre-RoPE keys
@@ -328,7 +333,8 @@ class DynamicCache(Cache):
         device = pre_rope_past_keys.device
         bs, num_heads, seq_len, head_dim = self.key_cache[layer_idx].shape
 
-        num_past = important_idx.shape[-1] + unimportant_idx.shape[-1]
+        if num_past is None:
+            num_past = important_idx.shape[-1] + unimportant_idx.shape[-1]
         past_vals = val_cache[:, :, :num_past, :]
         window_vals = val_cache[:, :, num_past:, :]
 
