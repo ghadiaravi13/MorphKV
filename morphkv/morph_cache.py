@@ -185,6 +185,54 @@ class DynamicCache(Cache):
         # new_size = sys.getsizeof(self.key_cache) + sys.getsizeof(self.value_cache) + sys.getsizeof(self.attn_cache)
         # print(f"cleared {100*(1-old_size/new_size)}% of KV Cache!\n")
     
+    def cleanup_with_indices(
+            self,
+            important_idx,       # [BS, NH, num_important]
+            num_past,            # int: boundary between past tokens and window tokens
+            layer_idx: int,
+    ) -> None:
+        """Batch-safe KV cache pruning via top-k index selection.
+
+        Retains only the ``important_idx`` positions from the past
+        (non-window) region of the cache and appends the window tokens
+        unchanged.  Fusion of unimportant tokens is handled separately
+        by the ``fuse_kv_*`` family of methods.
+
+        Args:
+            important_idx: Indices of important past tokens
+                           ``[BS, NH, num_important]``, values in ``[0, num_past)``.
+            num_past:      Number of past (non-window) tokens in the cache.
+            layer_idx:     Transformer layer index.
+        """
+        key_cache = self.key_cache[layer_idx]
+        val_cache = self.value_cache[layer_idx]
+        BS, NH, LEN, DIM = key_cache.shape
+
+        past_keys = key_cache[:, :, :num_past, :]
+        past_vals = val_cache[:, :, :num_past, :]
+        window_keys = key_cache[:, :, num_past:, :]
+        window_vals = val_cache[:, :, num_past:, :]
+
+        # #region agent log
+        import json as _j, time as _t; open('/home/rhg659/.cursor/debug-785c76.log','a').write(_j.dumps({"sessionId":"785c76","hypothesisId":"A","location":"morph_cache.py:cleanup_with_indices","message":"before gather","data":{"layer_idx":layer_idx,"BS":BS,"NH":NH,"LEN":LEN,"num_past":num_past,"past_keys_dim2":past_keys.shape[2],"imp_idx_shape":list(important_idx.shape),"imp_idx_max":int(important_idx.max()),"imp_idx_min":int(important_idx.min())}})+'\n')
+        # #endregion
+
+        imp_exp = important_idx.unsqueeze(-1).expand(-1, -1, -1, DIM)
+        imp_keys = past_keys.gather(2, imp_exp)
+        imp_vals = past_vals.gather(2, imp_exp)
+
+        self.key_cache[layer_idx] = torch.cat([imp_keys, window_keys], dim=2)
+        self.value_cache[layer_idx] = torch.cat([imp_vals, window_vals], dim=2)
+
+        if layer_idx == 0:
+            self.cache_size['key'] = max(self.cache_size['key'], self.key_cache[layer_idx].shape[2])
+            self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2])
+            if not self.prefill:
+                self.cache_size['len'] = LEN
+            else:
+                self.cache_size['len'] += 1
+            self.prefill = True
+
     def fuse_kv(self, headwise_bkts, headwise_bkt_scores, max_capacity, layer_idx):
         """Fuse KV cache entries according to bucket assignments.
 
@@ -325,6 +373,10 @@ class DynamicCache(Cache):
         past_vals = val_cache[:, :, :num_past, :]
         window_keys = key_cache[:, :, num_past:, :]
         window_vals = val_cache[:, :, num_past:, :]
+
+        # #region agent log
+        import json as _j, time as _t; open('/home/rhg659/.cursor/debug-785c76.log','a').write(_j.dumps({"sessionId":"785c76","hypothesisId":"C","location":"morph_cache.py:fuse_kv_hierarchical","message":"before gather","data":{"layer_idx":layer_idx,"cache_shape":list(key_cache.shape),"num_past":num_past,"past_keys_dim2":past_keys.shape[2],"imp_idx_shape":list(important_idx.shape),"imp_idx_max":int(important_idx.max()),"imp_idx_min":int(important_idx.min())}})+'\n')
+        # #endregion
 
         imp_exp = important_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
         imp_keys = past_keys.gather(2, imp_exp)
