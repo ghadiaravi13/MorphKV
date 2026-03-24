@@ -221,38 +221,193 @@ class Qwen2AttentionMorph(nn.Module):
             self.morph_type = config.morphkv['morph_type'] 
             self.evict_after = config.morphkv['evict_after'] #for bursty eviction during generation, we evict only after cache is > max_capacity * evict_after (say, after every 10 tokens)
             self.window_queries = [None]*self.config.num_hidden_layers
+            self.fuse_temperature = float(config.morphkv.get('fuse_temperature', 1.0))
+            self.prefill_flag = True
+            self.use_attn_offsets = config.morphkv.get('use_attn_offsets', False)
+            self.imp_budget = config.morphkv.get('imp_budget', 0.5)
+            self.pre_rope = config.morphkv.get('pre_rope', False)
+            self.score_percentile = float(config.morphkv.get('score_percentile', 0.9))
     
 
     def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
         
         #softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
+        start_idx = 0
+        # if not past_key_value.fusion_done:
+        #     start_idx = 1 # if fusion is done, we need to attend to the fused token
+
+        past_val_norms = past_key_value.value_cache[self.layer_idx][:, :, start_idx:-(self.WIN_SIZE+1), :].norm(dim=-1)
+        past_val_norms = past_val_norms.unsqueeze(2)
+
         if(key_heads!=query_heads):
             #For GQA, we reduce scores by summing over grouped heads -> changed to taking max over grouped heads
             if "max" in self.morph_type or self.morph_type=='max_fused': 
                 sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(past_val_norms * nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE-start_idx).indices+start_idx,0.0)
             elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
                 sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
+                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(past_val_norms * nn.functional.softmax(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1, start_idx:-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE-start_idx).indices+start_idx,0.0)
+            
             init_mask_kv[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
             
+            if not past_key_value.fusion_done:
+                init_mask_kv[:, :, -1, :start_idx] = 0.0 # if fusion is done, we need to attend to the fused token
+            
 
-        if "max" in self.morph_type or self.morph_type=='max_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        elif "sum" in self.morph_type or self.morph_type=='sum_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1).sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        
-        init_mask_attn[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
+        # attn mask is deprecated, use None for now
+        init_mask_attn = None
         
         if(key_heads!=query_heads):
             #For GQA, we have seperate masks for attention and KVs
             past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
-        else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
+        else: 
+            raise ValueError("MHA not supported yet: key_heads should not be equal to query_heads")
+            past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
         
+        # absolutely no reason to mask the current scores, let the first decoded token attend to full KV cache
+        # return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
+        return scores[:,:,-1:,:], init_mask_attn
 
-        return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
+    def morphkv_hierarchical_cache(self, scores, past_key_value, key_heads, query_heads):
+        """Hierarchical KV cache compression with contiguous island fusion.
+
+        After selecting important tokens, unimportant tokens form contiguous
+        islands (spans between important token positions).  Each island is
+        fused into a single representative via importance-weighted averaging
+        of post-RoPE keys and values.  Islands are scored by mean importance,
+        and the top-K islands are retained where K is the unimportant budget.
+
+        Final cache layout (totals to <= MAX_CAPACITY):
+            [selected_fused_islands | important_singletons | window + current]
+
+        Pipeline:
+          1. Compute per-KV-head importance (softmax attn × value norm).
+          2. Select top-K important tokens as singletons.
+          3. Identify contiguous islands of unimportant tokens via cumsum.
+          4. Fuse each island via importance-weighted averaging (post-RoPE).
+          5. Score islands by mean importance; retain top-K islands.
+          6. Assemble compressed cache and compute zero-pad offsets.
+        """
+        num_important = int(self.MAX_CAPACITY * self.imp_budget)
+        num_fused_slots = self.MAX_CAPACITY - self.WIN_SIZE - 1 - num_important
+
+        # ---- 1. Per-KV-head importance scores --------------------------------
+        scores_per_kv = (
+            scores
+            .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
+            .max(dim=2)[0]
+        )
+
+        past_attn = scores_per_kv[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)]
+        num_past = past_attn.shape[-1]
+        importance = nn.functional.softmax(past_attn / self.fuse_temperature, dim=-1).mean(dim=2)
+
+        past_val_norms = past_key_value.value_cache[self.layer_idx][:, :, :num_past, :].norm(dim=-1)
+        importance = importance * past_val_norms
+        # importance: [bs, key_heads, num_past]
+
+        # ---- 2. Select top-K important tokens --------------------------------
+        num_important = min(num_important, num_past)
+        num_unimportant = num_past - num_important
+
+        _, important_idx = importance.topk(num_important, dim=-1, sorted=False)
+        important_idx, _ = important_idx.sort(dim=-1)
+
+        _, unimportant_idx = importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
+        unimportant_idx, _ = unimportant_idx.sort(dim=-1)
+        unimp_importance = importance.gather(2, unimportant_idx)
+
+        # ---- 3. Identify contiguous islands of unimportant tokens ------------
+        key_cache = past_key_value.key_cache[self.layer_idx]
+        bs = key_cache.shape[0]
+        head_dim = key_cache.shape[3]
+        device = key_cache.device
+
+        is_important = torch.zeros(bs, key_heads, num_past, device=device, dtype=torch.long)
+        is_important.scatter_(2, important_idx, 1)
+
+        island_ids_all = torch.cumsum(is_important, dim=-1)
+        unimp_island_ids = island_ids_all.gather(2, unimportant_idx)
+        max_islands = num_important + 1
+
+        # ---- 4. Fuse each island (post-RoPE weighted averaging) --------------
+        past_keys = key_cache[:, :, :num_past, :]
+        past_vals = past_key_value.value_cache[self.layer_idx][:, :, :num_past, :]
+
+        unimp_exp = unimportant_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        unimp_keys = past_keys.gather(2, unimp_exp)
+        unimp_vals = past_vals.gather(2, unimp_exp)
+
+        island_mass = torch.zeros(bs, key_heads, max_islands, device=device, dtype=importance.dtype)
+        island_mass.scatter_add_(2, unimp_island_ids, unimp_importance)
+
+        weights = unimp_importance / island_mass.gather(2, unimp_island_ids).clamp(min=1e-8)
+        w = weights.unsqueeze(-1).to(past_keys.dtype)
+
+        bkt_exp = unimp_island_ids.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        fused_keys = torch.zeros(bs, key_heads, max_islands, head_dim, device=device, dtype=past_keys.dtype)
+        fused_vals = torch.zeros(bs, key_heads, max_islands, head_dim, device=device, dtype=past_vals.dtype)
+        fused_keys.scatter_add_(2, bkt_exp, unimp_keys * w)
+        fused_vals.scatter_add_(2, bkt_exp, unimp_vals * w)
+
+        # ---- 5. Score islands by mean importance, select top-K ---------------
+        island_counts = torch.zeros(bs, key_heads, max_islands, device=device, dtype=torch.float32)
+        island_counts.scatter_add_(
+            2, unimp_island_ids,
+            torch.ones(bs, key_heads, num_unimportant, device=device, dtype=torch.float32),
+        )
+
+        island_scores = island_mass / island_counts.clamp(min=1)
+        island_scores = island_scores.masked_fill(island_counts == 0, float('-inf'))
+
+        K = min(num_fused_slots, max_islands)
+        _, top_island_idx = island_scores.topk(K, dim=-1, sorted=False)
+        top_island_idx, _ = top_island_idx.sort(dim=-1)
+
+        sel_exp = top_island_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        selected_fused_keys = fused_keys.gather(2, sel_exp)
+        selected_fused_vals = fused_vals.gather(2, sel_exp)
+        selected_sizes = island_counts.gather(2, top_island_idx)
+
+        if K < num_fused_slots:
+            pad_size = num_fused_slots - K
+            pad_kv = torch.zeros(bs, key_heads, pad_size, head_dim, device=device, dtype=past_keys.dtype)
+            selected_fused_keys = torch.cat([selected_fused_keys, pad_kv], dim=2)
+            selected_fused_vals = torch.cat([selected_fused_vals, pad_kv], dim=2)
+            selected_sizes = torch.cat([
+                selected_sizes,
+                torch.zeros(bs, key_heads, pad_size, device=device, dtype=torch.float32),
+            ], dim=2)
+
+        # ---- 6. Assemble compressed cache ------------------------------------
+        past_key_value.fuse_kv_hierarchical(
+            selected_fused_keys, selected_fused_vals,
+            important_idx, num_past, self.layer_idx,
+        )
+
+        # ---- 7. Zero-pad offset (no log-correction) -------------------------
+        is_zero_pad = (selected_sizes == 0)
+
+        attn_logit_offsets = torch.zeros(
+            bs, key_heads, 1, num_fused_slots + num_important + self.WIN_SIZE + 1,
+            device=device, dtype=torch.float32,
+        )
+        attn_logit_offsets = attn_logit_offsets.repeat_interleave(query_heads // key_heads, dim=1)
+
+        zero_pad_fused = torch.where(
+            is_zero_pad,
+            torch.tensor(float('-inf'), device=device, dtype=torch.float32),
+            torch.zeros(1, device=device, dtype=torch.float32),
+        )
+        zero_pad_rest = torch.zeros(
+            bs, key_heads, num_important + self.WIN_SIZE + 1,
+            device=device, dtype=torch.float32,
+        )
+        zero_pad = torch.cat([zero_pad_fused, zero_pad_rest], dim=-1)
+        zero_pad = zero_pad.repeat_interleave(query_heads // key_heads, dim=1)
+        zero_pad_offset = zero_pad.unsqueeze(2)
+
+        return attn_logit_offsets, zero_pad_offset
 
     def forward(
         self,
@@ -308,8 +463,23 @@ class Qwen2AttentionMorph(nn.Module):
         # use MorphKV only in generative phase, ie, when hidden states has 1 token (the newly generated)
         if self.config.morphkv and key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after:
             if hidden_states.shape[1]==1:
-                causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] if attention_mask is not None else None
-                attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
+                if 'unimp' not in self.morph_type: # use normal morphkv
+                    attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
+                else:
+                    if not past_key_value.fusion_done[self.layer_idx]:
+                        attn_logit_offsets, zero_pad_offset = self.morphkv_hierarchical_cache(attn_weights, past_key_value, key_heads, query_heads)
+                        key_states = past_key_value.key_cache[self.layer_idx]
+                        value_states = past_key_value.value_cache[self.layer_idx]
+                        if key_states.shape[1]!=query_states.shape[1]:
+                            key_states = repeat_kv(key_states, self.num_key_value_groups)
+                            value_states = repeat_kv(value_states, self.num_key_value_groups)
+                        recent_query = query_states[:,:,-1:,...]
+                        attn_weights = torch.matmul(recent_query, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+                        attn_weights = attn_weights + zero_pad_offset  # always mask empty buckets
+                        if self.use_attn_offsets:
+                            attn_weights = attn_weights + attn_logit_offsets
+                    else:
+                        attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
                 
                 # morphkv call must have emptied KV Cache, so cleanup!
                 if self.garbage[self.layer_idx]==True:

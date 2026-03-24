@@ -256,235 +256,145 @@ class LlamaAttentionMorph(nn.Module):
         # absolutely no reason to mask the current scores, let the first decoded token attend to full KV cache
         # return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
         return scores[:,:,-1:,:], init_mask_attn
-    
-    @staticmethod
-    def _finalize_bucket(tokens, token_scores, out_bkts, out_scores, out_wts):
-        """Normalize bucket scores and append the finalized bucket to output lists.
 
-        Args:
-            tokens:       List of token indices in this bucket.
-            token_scores: Corresponding raw importance scores.
-            out_bkts:     Accumulator list — bucket index lists.
-            out_scores:   Accumulator list — normalized score lists.
-            out_wts:      Accumulator list — bucket sizes (floats).
-        """
-        total = sum(token_scores)
-        if total > 0:
-            normalized = [s / total for s in token_scores]
-        else:
-            # Uniform weights when all scores are zero
-            n = len(token_scores)
-            normalized = [1.0 / n] * n
+    def morphkv_hierarchical_cache(self, scores, past_key_value, key_heads, query_heads):
+        """Hierarchical KV cache compression with contiguous island fusion.
 
-        out_bkts.append(list(tokens))
-        out_scores.append(normalized)
-        out_wts.append(float(len(tokens)))
+        After selecting important tokens, unimportant tokens form contiguous
+        islands (spans between important token positions).  Each island is
+        fused into a single representative via importance-weighted averaging
+        of post-RoPE keys and values.  Islands are scored by mean importance,
+        and the top-K islands are retained where K is the unimportant budget.
 
-    def morphkv_plus_fuse_eff(self, scores, past_key_value, key_heads, query_heads):
-        """Vectorized KV cache compression via cumsum-based equal-mass partitioning.
+        Final cache layout (totals to <= MAX_CAPACITY):
+            [selected_fused_islands | important_singletons | window + current]
 
-        Functionally equivalent to ``morphkv_plus_fuse`` but replaces all
-        Python-level loops and per-token ``.item()`` calls with batched
-        tensor operations (cumsum, scatter_add), yielding a large speedup
-        on GPU for long sequences.
-
-        The greedy balanced-mass partition is approximated by placing bucket
-        boundaries at equal-mass intervals of the cumulative importance
-        distribution.  Each bucket's K/V vectors are fused via importance-
-        weighted averaging through ``fuse_kv_eff``.
-
-        Args:
-            scores:         Raw attention logits  [bs, query_heads, seq_len, seq_len].
-            past_key_value: KV cache object with a ``fuse_kv_eff()`` method.
-            key_heads:      Number of KV heads (may differ from *query_heads* under GQA).
-            query_heads:    Number of query attention heads.
-
-        Returns:
-            attn_logit_offsets: Tensor of shape [bs, query_heads, 1, MAX_CAPACITY].
-        """
-        num_fused_slots = self.MAX_CAPACITY - self.WIN_SIZE - 1
-        total_fused_len = self.MAX_CAPACITY
-
-        # ---- 1. Per-KV-head importance scores --------------------------------
-        # For GQA: max-reduce query heads within each KV group.
-        scores_per_kv = (
-            scores
-            .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
-            .max(dim=2)[0]
-        )  # [bs, key_heads, seq_len, seq_len]
-
-        # Window-queries → past-keys slice, softmax, average over window queries.
-        past_attn = scores_per_kv[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)]
-        num_past = past_attn.shape[-1]
-        importance = nn.functional.softmax(past_attn / self.fuse_temperature, dim=-1).mean(dim=2)
-        # importance: [bs, key_heads, num_past]
-
-        # ---- 2. Vectorized equal-mass partitioning via cumulative sum --------
-        # Cumulative importance from oldest to newest token.
-        cs = torch.cumsum(importance, dim=-1)        # [bs, key_heads, num_past]
-        total_mass = cs[..., -1:].clamp(min=1e-8)   # [bs, key_heads, 1]
-
-        # Assign each token to a bucket: bucket_id = floor(cdf * S), clamped.
-        bucket_ids = (cs * num_fused_slots / total_mass).long().clamp(0, num_fused_slots - 1)
-        # bucket_ids: [bs, key_heads, num_past]  — contiguous, non-decreasing
-
-        # ---- 3. Fuse KV cache entries via scatter-add ------------------------
-        past_key_value.fuse_kv_eff(
-            bucket_ids, importance, num_fused_slots, self.layer_idx,
-        )
-
-        # ---- 4. Log-correction offsets: log(bucket_size) --------------------
-        bs = scores.shape[0]
-        device = scores.device
-
-        bucket_sizes = torch.zeros(
-            bs, key_heads, num_fused_slots, device=device, dtype=torch.float32,
-        )
-        bucket_sizes.scatter_add_(
-            2, bucket_ids,
-            torch.ones(bs, key_heads, num_past, device=device, dtype=torch.float32),
-        )
-        bucket_sizes.clamp_(min=1.0)   # log(1) = 0 for empty / padded buckets
-
-        singleton_sizes = torch.ones(
-            bs, key_heads, self.WIN_SIZE + 1, device=device, dtype=torch.float32,
-        )
-        all_sizes = torch.cat([bucket_sizes, singleton_sizes], dim=-1)
-        # all_sizes: [bs, key_heads, MAX_CAPACITY]
-
-        # Replicate for GQA: expand each KV head's sizes to its query-head group
-        all_sizes = all_sizes.repeat_interleave(query_heads // key_heads, dim=1)
-        # [bs, query_heads, MAX_CAPACITY]
-
-        attn_logit_offsets = torch.log(all_sizes).unsqueeze(2)
-        # [bs, query_heads, 1, MAX_CAPACITY]
-
-        return attn_logit_offsets
-
-    def morphkv_plus_fuse_unimportant(self, scores, past_key_value, key_heads, query_heads):
-        """KV cache compression that preserves important tokens and only fuses the rest.
-
-        The top ``MAX_CAPACITY // 2`` most-important past tokens (per KV head)
-        are kept as-is — treated identically to window tokens.  Only the
-        remaining *unimportant* tokens undergo cumsum-based equal-mass
-        partitioning and weighted-average fusion.
-
-        Final cache layout (totals to MAX_CAPACITY):
-            [fused_buckets | important_singletons | window + current]
-
-        Args:
-            scores:         Raw attention logits  [bs, query_heads, seq_len, seq_len].
-            past_key_value: KV cache object with a ``fuse_kv_eff_split()`` method.
-            key_heads:      Number of KV heads (may differ from *query_heads* under GQA).
-            query_heads:    Number of query attention heads.
-
-        Returns:
-            attn_logit_offsets: Tensor of shape [bs, query_heads, 1, MAX_CAPACITY].
-                Log-correction for bucket sizes (gated by config flag).
-            zero_pad_offset:    Tensor of shape [bs, query_heads, 1, MAX_CAPACITY].
-                ``-inf`` for empty (zero-padded) fused-bucket slots, ``0``
-                elsewhere.  Always added to attention logits.
+        Pipeline:
+          1. Compute per-KV-head importance (softmax attn × value norm).
+          2. Select top-K important tokens as singletons.
+          3. Identify contiguous islands of unimportant tokens via cumsum.
+          4. Fuse each island via importance-weighted averaging (post-RoPE).
+          5. Score islands by mean importance; retain top-K islands.
+          6. Assemble compressed cache and compute zero-pad offsets.
         """
         num_important = int(self.MAX_CAPACITY * self.imp_budget)
-        num_fused_slots = int((self.MAX_CAPACITY * (1 - self.imp_budget))) - self.WIN_SIZE - 1
+        num_fused_slots = self.MAX_CAPACITY - self.WIN_SIZE - 1 - num_important
 
         # ---- 1. Per-KV-head importance scores --------------------------------
         scores_per_kv = (
             scores
             .view(scores.shape[0], key_heads, -1, scores.shape[2], scores.shape[3])
             .max(dim=2)[0]
-        )  # [bs, key_heads, seq_len, seq_len]
+        )
 
         past_attn = scores_per_kv[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)]
         num_past = past_attn.shape[-1]
         importance = nn.functional.softmax(past_attn / self.fuse_temperature, dim=-1).mean(dim=2)
-        # importance: [bs, key_heads, num_past]
 
-        # Weight importance by value vector magnitudes
         past_val_norms = past_key_value.value_cache[self.layer_idx][:, :, :num_past, :].norm(dim=-1)
         importance = importance * past_val_norms
+        # importance: [bs, key_heads, num_past]
 
-        # ---- 2. Identify top-K important tokens (kept as singletons) ---------
-        num_important = min(num_important, num_past)  # guard against short sequences
+        # ---- 2. Select top-K important tokens --------------------------------
+        num_important = min(num_important, num_past)
         num_unimportant = num_past - num_important
 
         _, important_idx = importance.topk(num_important, dim=-1, sorted=False)
-        important_idx, _ = important_idx.sort(dim=-1)  # preserve temporal order
-        # important_idx: [bs, key_heads, num_important]
+        important_idx, _ = important_idx.sort(dim=-1)
 
-        # ---- 3. Extract unimportant tokens (sorted by position) --------------
         _, unimportant_idx = importance.topk(num_unimportant, dim=-1, largest=False, sorted=False)
-        unimportant_idx, _ = unimportant_idx.sort(dim=-1)  # temporal order
-        # unimportant_idx: [bs, key_heads, num_unimportant]
-
+        unimportant_idx, _ = unimportant_idx.sort(dim=-1)
         unimp_importance = importance.gather(2, unimportant_idx)
-        # unimp_importance: [bs, key_heads, num_unimportant]
 
-        # ---- 4. Cumsum-based equal-mass partitioning on unimportant tokens ---
-        cs = torch.cumsum(unimp_importance, dim=-1)
-        total_mass = cs[..., -1:].clamp(min=1e-8)
-        bucket_ids = (cs * num_fused_slots / total_mass).long().clamp(0, num_fused_slots - 1)
-        # bucket_ids: [bs, key_heads, num_unimportant]
+        # ---- 3. Identify contiguous islands of unimportant tokens ------------
+        key_cache = past_key_value.key_cache[self.layer_idx]
+        bs = key_cache.shape[0]
+        head_dim = key_cache.shape[3]
+        device = key_cache.device
 
-        # ---- 5. Fuse KV cache (unimportant → scatter-add, important → as-is)
-        past_key_value.fuse_kv_eff_split(
-            important_idx, unimportant_idx, bucket_ids,
-            unimp_importance, num_fused_slots, self.layer_idx,
-        )
+        is_important = torch.zeros(bs, key_heads, num_past, device=device, dtype=torch.long)
+        is_important.scatter_(2, important_idx, 1)
 
-        # ---- 6. Log-correction offsets: log(bucket_size) --------------------
-        bs = scores.shape[0]
-        device = scores.device
+        island_ids_all = torch.cumsum(is_important, dim=-1)
+        unimp_island_ids = island_ids_all.gather(2, unimportant_idx)
+        max_islands = num_important + 1
 
-        # Fused bucket sizes
-        bucket_sizes = torch.zeros(
-            bs, key_heads, num_fused_slots, device=device, dtype=torch.float32,
-        )
-        bucket_sizes.scatter_add_(
-            2, bucket_ids,
+        # ---- 4. Fuse each island (post-RoPE weighted averaging) --------------
+        past_keys = key_cache[:, :, :num_past, :]
+        past_vals = past_key_value.value_cache[self.layer_idx][:, :, :num_past, :]
+
+        unimp_exp = unimportant_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        unimp_keys = past_keys.gather(2, unimp_exp)
+        unimp_vals = past_vals.gather(2, unimp_exp)
+
+        island_mass = torch.zeros(bs, key_heads, max_islands, device=device, dtype=importance.dtype)
+        island_mass.scatter_add_(2, unimp_island_ids, unimp_importance)
+
+        weights = unimp_importance / island_mass.gather(2, unimp_island_ids).clamp(min=1e-8)
+        w = weights.unsqueeze(-1).to(past_keys.dtype)
+
+        bkt_exp = unimp_island_ids.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        fused_keys = torch.zeros(bs, key_heads, max_islands, head_dim, device=device, dtype=past_keys.dtype)
+        fused_vals = torch.zeros(bs, key_heads, max_islands, head_dim, device=device, dtype=past_vals.dtype)
+        fused_keys.scatter_add_(2, bkt_exp, unimp_keys * w)
+        fused_vals.scatter_add_(2, bkt_exp, unimp_vals * w)
+
+        # ---- 5. Score islands by mean importance, select top-K ---------------
+        island_counts = torch.zeros(bs, key_heads, max_islands, device=device, dtype=torch.float32)
+        island_counts.scatter_add_(
+            2, unimp_island_ids,
             torch.ones(bs, key_heads, num_unimportant, device=device, dtype=torch.float32),
         )
 
-        # Identify zero-padded (empty) fused-bucket slots *before* clamping
-        is_zero_pad = (bucket_sizes == 0)  # [bs, key_heads, num_fused_slots]
+        island_scores = island_mass / island_counts.clamp(min=1)
+        island_scores = island_scores.masked_fill(island_counts == 0, float('-inf'))
 
-        bucket_sizes.clamp_(min=1.0)   # safe for log: log(1) = 0 for empties
+        K = min(num_fused_slots, max_islands)
+        _, top_island_idx = island_scores.topk(K, dim=-1, sorted=False)
+        top_island_idx, _ = top_island_idx.sort(dim=-1)
 
-        # Important singletons and window singletons all have size 1
-        important_sizes = torch.ones(
-            bs, key_heads, num_important, device=device, dtype=torch.float32,
+        sel_exp = top_island_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        selected_fused_keys = fused_keys.gather(2, sel_exp)
+        selected_fused_vals = fused_vals.gather(2, sel_exp)
+        selected_sizes = island_counts.gather(2, top_island_idx)
+
+        if K < num_fused_slots:
+            pad_size = num_fused_slots - K
+            pad_kv = torch.zeros(bs, key_heads, pad_size, head_dim, device=device, dtype=past_keys.dtype)
+            selected_fused_keys = torch.cat([selected_fused_keys, pad_kv], dim=2)
+            selected_fused_vals = torch.cat([selected_fused_vals, pad_kv], dim=2)
+            selected_sizes = torch.cat([
+                selected_sizes,
+                torch.zeros(bs, key_heads, pad_size, device=device, dtype=torch.float32),
+            ], dim=2)
+
+        # ---- 6. Assemble compressed cache ------------------------------------
+        past_key_value.fuse_kv_hierarchical(
+            selected_fused_keys, selected_fused_vals,
+            important_idx, num_past, self.layer_idx,
         )
-        window_sizes = torch.ones(
-            bs, key_heads, self.WIN_SIZE + 1, device=device, dtype=torch.float32,
+
+        # ---- 7. Zero-pad offset (no log-correction) -------------------------
+        is_zero_pad = (selected_sizes == 0)
+
+        attn_logit_offsets = torch.zeros(
+            bs, key_heads, 1, num_fused_slots + num_important + self.WIN_SIZE + 1,
+            device=device, dtype=torch.float32,
         )
+        attn_logit_offsets = attn_logit_offsets.repeat_interleave(query_heads // key_heads, dim=1)
 
-        all_sizes = torch.cat([bucket_sizes, important_sizes, window_sizes], dim=-1)
-        # all_sizes: [bs, key_heads, MAX_CAPACITY]
-
-        # Replicate for GQA
-        all_sizes = all_sizes.repeat_interleave(query_heads // key_heads, dim=1)
-        # [bs, query_heads, MAX_CAPACITY]
-
-        attn_logit_offsets = torch.log(all_sizes).unsqueeze(2)
-        # [bs, query_heads, 1, MAX_CAPACITY]
-
-        # ---- 7. Zero-pad offset: -inf for empty fused-bucket slots -----------
         zero_pad_fused = torch.where(
             is_zero_pad,
             torch.tensor(float('-inf'), device=device, dtype=torch.float32),
             torch.zeros(1, device=device, dtype=torch.float32),
-        )  # [bs, key_heads, num_fused_slots]
-
+        )
         zero_pad_rest = torch.zeros(
             bs, key_heads, num_important + self.WIN_SIZE + 1,
             device=device, dtype=torch.float32,
         )
         zero_pad = torch.cat([zero_pad_fused, zero_pad_rest], dim=-1)
-        # [bs, key_heads, MAX_CAPACITY]
-
         zero_pad = zero_pad.repeat_interleave(query_heads // key_heads, dim=1)
         zero_pad_offset = zero_pad.unsqueeze(2)
-        # [bs, query_heads, 1, MAX_CAPACITY]
 
         return attn_logit_offsets, zero_pad_offset
 
@@ -565,7 +475,7 @@ class LlamaAttentionMorph(nn.Module):
                     attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
                 else:
                     if not past_key_value.fusion_done[self.layer_idx]:
-                        attn_logit_offsets, zero_pad_offset = self.morphkv_plus_fuse_unimportant(attn_weights, past_key_value, key_heads, query_heads)
+                        attn_logit_offsets, zero_pad_offset = self.morphkv_hierarchical_cache(attn_weights, past_key_value, key_heads, query_heads)
                         key_states = past_key_value.key_cache[self.layer_idx]
                         value_states = past_key_value.value_cache[self.layer_idx]
                         if key_states.shape[1]!=query_states.shape[1]:

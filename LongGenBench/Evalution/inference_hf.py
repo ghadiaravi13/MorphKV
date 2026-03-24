@@ -34,7 +34,7 @@ def parse_args():
 
     parser.add_argument('--max_length', type=int, default=8000, help='Maximum length of generation.')
     parser.add_argument('--gpu', type=int, default=1, help='Number of GPUs to use.')
-    parser.add_argument('--output_file', type=str, required=True, help='Output file path.')
+    # parser.add_argument('--output_file', type=str, required=True, help='Output file path.')
     parser.add_argument('--input_file', type=str, required=True, help='input file path.')
     parser.add_argument('--preds_path', default="preds_greedy", type=str, required=True, help='preds file path.')
 
@@ -165,5 +165,6 @@ for input_data in tqdm(inputs):
         results.append(process_output( input_data['prefix']+ input_data['response']))
     if "prof" in args.morph_type: break
 
-process_and_save_results(inputs_used, results, args.output_file)
-print(f"\nSaved result to {args.output_file}")
+output_file = f"{args.preds_path}/{model_name}.json"
+process_and_save_results(inputs_used, results, output_file)
+print(f"\nSaved result to {output_file}")
