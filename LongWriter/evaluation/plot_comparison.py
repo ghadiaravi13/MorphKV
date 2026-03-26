@@ -83,7 +83,7 @@ def main():
         )
         bars_hier = ax.bar(
             x + width / 2, norm_hier, width,
-            label="HierCache", color="#E07B54", edgecolor="white", linewidth=0.8,
+            label="MorphKV++", color="#E07B54", edgecolor="white", linewidth=0.8,
         )
 
         for bar, val in zip(bars_hier, norm_hier):
@@ -96,7 +96,7 @@ def main():
 
         ax.axhline(y=1.0, color="grey", linewidth=0.6, linestyle="--")
         ax.set_ylabel("Normalized Score (MorphKV = 1.0)")
-        ax.set_title(f"HierCache vs MorphKV — {MODEL_DISPLAY[model]}")
+        ax.set_title(f"MorphKV vs MorphKV++ — {MODEL_DISPLAY[model]}")
         ax.set_xticks(x)
         ax.set_xticklabels(DISPLAY_LABELS)
         ax.legend(loc="upper right", framealpha=0.9)

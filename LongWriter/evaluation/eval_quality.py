@@ -24,7 +24,7 @@ prompt_template = open("judge.txt", "r", encoding="utf-8").read()
 
 gpt_api_key = "GPT4_API_KEY"
 model_keys = {"gpt-4o-2024-05-13":gpt_api_key,
-              "mistral-large-latest": "MISTRAL_API_KEY"}
+              "mistral-large-latest": "SekxSZeXVMtmh2FjoumHCB7asxD7D0Vr"}
 model_link = {"gpt-4o-2024-05-13": "https://api.openai.com/v1/chat/completions",
               "mistral-large-latest": "https://api.mistral.ai/v1/chat/completions"}
 
@@ -59,6 +59,7 @@ def get_response_gpt4(prompt, temperature=0.5, max_new_tokens=1024, stop=None):
             }, headers=headers, timeout=600)
             if resp.status_code != 200:
                 raise Exception(resp.text)
+                time.sleep(5)
             resp = resp.json()
             if "gpt" in GPT_MODEL:
                 time.sleep(5)
@@ -186,8 +187,8 @@ for dim in dims:
     fig.write_html(f"{args.pred_path}/{model_name}/judge_scores_hist_{dim}.html")
 
 try:
-    with pd.ExcelWriter(f"preds/LW_score_data.xlsx",mode='a',if_sheet_exists='replace') as writer:
+    with pd.ExcelWriter(f"{args.pred_path}/LW_score_data.xlsx",mode='a',if_sheet_exists='replace') as writer:
         score_df.to_excel(writer,sheet_name=args.model)
 except FileNotFoundError:
-    with pd.ExcelWriter(f"preds/LW_score_data.xlsx",mode='w') as writer:
+    with pd.ExcelWriter(f"{args.pred_path}/LW_score_data.xlsx",mode='w') as writer:
         score_df.to_excel(writer,sheet_name=args.model)

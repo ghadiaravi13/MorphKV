@@ -11,7 +11,7 @@ KEY_SPLIT_TOKEN = "_ws32_mc2000.0"
 BASELINE_DIR = "mkv_results"
 COMPARISON_DIR = "hier_cache_ft2.0_ib0.8"
 OUTPUT_NAME = "normalized_scores.png"
-SKIP_DATASETS = {"dureader"}
+SKIP_DATASETS = {} #{"dureader"}
 
 
 def parse_args():
