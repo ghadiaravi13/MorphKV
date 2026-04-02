@@ -2,16 +2,11 @@
 set -euo pipefail
 
 MODEL="${MODEL:-mistral}"
-WS="${WS:-32}"
-MC="${MC:-2000}"
-IB="${IB:-0.8}"
-FT="${FT:-2.0}"
-PRED_PATH="${PRED_PATH:-mkv_masu}"
-MORPH_TYPE="${MORPH_TYPE:-masu_fused}"
+PRED_PATH="${PRED_PATH:-full_attn}"
 BS="${BS:-1}"
 CUDA="${CUDA_VISIBLE_DEVICES:-0}"
 
-LOG_DIR="logs/${MODEL}_${MORPH_TYPE}"
+LOG_DIR="logs/${MODEL}_${PRED_PATH}"
 mkdir -p "$LOG_DIR"
 
 PIDS=()
@@ -21,14 +16,12 @@ for SPLIT in 1 2 3 4 5; do
     CUDA_VISIBLE_DEVICES=$CUDA python pred_single.py \
         --model "$MODEL" \
         --pred_path "$PRED_PATH" \
-        --morph_type "$MORPH_TYPE" \
         -bs "$BS" \
         -ds "$SPLIT" \
-        -ws "$WS" \
-        -mc "$MC" \
-        > "${LOG_DIR}/mkv_split_${SPLIT}.log" 2>&1 &
+        --no_morph
+        > "${LOG_DIR}/full_attn_split_${SPLIT}.log" 2>&1 &
     PIDS+=($!)
-    echo "  PID=$! -> ${LOG_DIR}/mkv_split_${SPLIT}.log"
+    echo "  PID=$! -> ${LOG_DIR}/full_attn_split_${SPLIT}.log"
 done
 
 echo ""

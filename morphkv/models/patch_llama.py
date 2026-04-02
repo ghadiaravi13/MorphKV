@@ -225,8 +225,11 @@ class LlamaAttentionMorph(nn.Module):
         # if not past_key_value.fusion_done:
         #     start_idx = 1 # if fusion is done, we need to attend to the fused token
 
-        past_val_norms = past_key_value.value_cache[self.layer_idx][:, :, start_idx:-(self.WIN_SIZE+1), :].norm(dim=-1)
-        past_val_norms = past_val_norms.unsqueeze(2)
+        if "unval" not in self.morph_type: # do not scale by value norm if unval is in the morph type
+            past_val_norms = past_key_value.value_cache[self.layer_idx][:, :, start_idx:-(self.WIN_SIZE+1), :].norm(dim=-1)
+            past_val_norms = past_val_norms.unsqueeze(2)
+        else:
+            past_val_norms = 1
 
         if(key_heads!=query_heads):
             #For GQA, we reduce scores by summing over grouped heads -> changed to taking max over grouped heads
