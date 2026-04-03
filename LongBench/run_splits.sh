@@ -3,10 +3,10 @@ set -euo pipefail
 
 MODEL="${MODEL:-mistral}"
 WS="${WS:-32}"
-MC="${MC:-2000}"
+MC="${MC:-2048}"
 IB="${IB:-0.8}"
 FT="${FT:-2.0}"
-PRED_PATH="${PRED_PATH:-hier_cache_ft2.0_ib0.8}"
+PRED_PATH="${PRED_PATH:-hier_attn_cache}"
 MORPH_TYPE="${MORPH_TYPE:-unimp_sum_fused}"
 BS="${BS:-1}"
 CUDA="${CUDA_VISIBLE_DEVICES:-0}"
