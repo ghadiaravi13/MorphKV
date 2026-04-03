@@ -3,11 +3,11 @@ set -euo pipefail
 
 MODEL="${MODEL:-mistral}"
 WS="${WS:-32}"
-MC="${MC:-2000}"
+MC="${MC:-2048}"
 IB="${IB:-0.8}"
 FT="${FT:-2.0}"
-PRED_PATH="${PRED_PATH:-mkv_masu}"
-MORPH_TYPE="${MORPH_TYPE:-masu_fused}"
+PRED_PATH="${PRED_PATH:-mkv_attn_cache}"
+MORPH_TYPE="${MORPH_TYPE:-sum_fused}"
 BS="${BS:-1}"
 CUDA="${CUDA_VISIBLE_DEVICES:-0}"
 
