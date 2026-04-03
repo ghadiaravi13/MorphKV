@@ -7,9 +7,9 @@ import numpy as np
 
 # Dataset-specific keys begin with the dataset name and then append run metadata
 # such as window size, ft, ao, pruning mode, and prerope flags.
-KEY_SPLIT_TOKEN = "_ws32_mc2000.0"
+KEY_SPLIT_TOKEN = "_ws32_mc2048.0"
 BASELINE_DIR = "mkv_results_default"
-COMPARISON_DIR = "hier_cache_ft2.0_ib0.8"
+COMPARISON_DIR = "hier_attn_cache"
 OUTPUT_NAME = "normalized_scores.png"
 SKIP_DATASETS = {} #{"dureader"}
 

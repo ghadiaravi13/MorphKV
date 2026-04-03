@@ -78,8 +78,9 @@ class DynamicCache(Cache):
             self.value_cache: List[torch.Tensor] = [[] for _ in range(num_hidden_layers)]
             self.query_cache: List[torch.Tensor] = [[] for _ in range(num_hidden_layers)]
             self.attn_cache: List[torch.Tensor] = [[] for _ in range(num_hidden_layers)]
+            self.fusion_done = [False for _ in range(num_hidden_layers)]
         self._seen_tokens = 0
-        self.cache_size = {'key': 0, 'value': 0, 'attn_wts': 0, 'len': 0}
+        self.cache_size = {'key': 0, 'value': 0, 'query': 0, 'attn_wts': 0, 'len': 0}
         self.input_size = torch.inf
         self.max_capacity = torch.inf
         self.win_size = torch.inf
@@ -125,13 +126,10 @@ class DynamicCache(Cache):
                 ).view(BS, NH, -1, DIM)
         if layer_idx == 0:
             if self.key_cache[layer_idx] != []:
-                self.cache_size['key'] = max(self.cache_size['key'], self.key_cache[layer_idx].shape[2])
+                self.cache_size['key'] = self.key_cache[layer_idx].shape[2]
             if self.value_cache[layer_idx] != []:
-                self.cache_size['value'] = max(self.cache_size['value'], self.value_cache[layer_idx].shape[2])
-            if not self.prefill:
-                self.cache_size['len'] = LEN
-            else:
-                self.cache_size['len'] += 1
+                self.cache_size['value'] = self.value_cache[layer_idx].shape[2]
+            self.cache_size['len'] = self.key_cache[layer_idx].shape[2] if self.key_cache[layer_idx] != [] else 0
             self.prefill = True
 
     def update_win_queries(self, win_queries, layer_idx):
@@ -141,6 +139,47 @@ class DynamicCache(Cache):
             self.query_cache[layer_idx] = torch.roll(self.query_cache[layer_idx], shifts=-1, dims=2)
             self.query_cache[layer_idx][..., -1:, :] = win_queries
         return self.query_cache[layer_idx]
+
+    def fuse_kv_hierarchical(
+        self, fused_keys, fused_vals, important_idx, num_past, layer_idx,
+    ):
+        """Assemble compressed cache from pre-fused island keys/values and
+        important singletons.
+
+        Final layout: ``[fused_islands | important_singletons | window]``.
+
+        Args:
+            fused_keys:     Selected fused island keys
+                            [bs, num_heads, num_fused_slots, head_dim].
+            fused_vals:     Selected fused island values (same shape).
+            important_idx:  Positional indices of important past tokens
+                            [bs, num_heads, num_important], sorted ascending.
+            num_past:       Number of past (non-window) tokens in the cache
+                            before compression.
+            layer_idx:      Transformer layer index.
+        """
+        key_cache = self.key_cache[layer_idx]
+        val_cache = self.value_cache[layer_idx]
+        head_dim = key_cache.shape[3]
+
+        past_keys = key_cache[:, :, :num_past, :]
+        past_vals = val_cache[:, :, :num_past, :]
+        window_keys = key_cache[:, :, num_past:, :]
+        window_vals = val_cache[:, :, num_past:, :]
+
+        imp_exp = important_idx.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+        imp_keys = past_keys.gather(2, imp_exp)
+        imp_vals = past_vals.gather(2, imp_exp)
+
+        self.key_cache[layer_idx] = torch.cat([fused_keys, imp_keys, window_keys], dim=2)
+        self.value_cache[layer_idx] = torch.cat([fused_vals, imp_vals, window_vals], dim=2)
+
+        self.fusion_done[layer_idx] = True
+
+        if layer_idx == 0:
+            new_len = self.key_cache[layer_idx].shape[2]
+            self.cache_size['key'] = new_len
+            self.cache_size['value'] = new_len
 
     def update(
         self,
@@ -303,6 +342,9 @@ class OffloadedCache(DynamicCache):
         cache_kwargs: Optional[Dict[str, Any]] = None,
         phase: str = "join"
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(query_states, dict):
+            cache_kwargs = query_states
+            query_states = None
         if layer_idx == 0:
             self._seen_tokens += key_states.shape[-2]
 

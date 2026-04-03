@@ -4,9 +4,9 @@ from transformers.generation.configuration_utils import NEED_SETUP_CACHE_CLASSES
 import transformers.generation.configuration_utils as config_utils
 
 from morphkv.models.patch_mistral import MistralAttention as MistralAttentionMorph, MistralFlashAttention2 as MistralFlashAttention2Morph, MistralModel as MistralModelMorph
-# from morphkv.models.patch_llama import LlamaAttentionMorph, LlamaFlashAttention2Morph, llama_model_forward
-# from morphkv.models.patch_qwen2 import Qwen2AttentionMorph, Qwen2FlashAttention2Morph, qwen2_model_forward
-# from morphkv.models.patch_phi3 import Phi3AttentionMorph, Phi3FlashAttention2Morph, phi3_model_forward
+from morphkv.models.patch_llama import LlamaAttentionMorph, LlamaFlashAttention2Morph, llama_model_forward
+from morphkv.models.patch_qwen2 import Qwen2AttentionMorph, Qwen2FlashAttention2Morph, qwen2_model_forward
+from morphkv.models.patch_phi3 import Phi3AttentionMorph, Phi3FlashAttention2Morph, phi3_model_forward
 
 from morphkv.morph_cache import OffloadedCache as MorphOffloadedCache
 from morphkv.gen_utils import GenerationMixin as GenerationMixinMorph
@@ -92,20 +92,20 @@ def patch_cache():
 def patch_morphkv():
 
     patch_mistral()
-    # patch_llama()
-    # patch_qwen2()
-    # patch_phi3()
+    patch_llama()
+    patch_qwen2()
+    patch_phi3()
     patch_cache()
 
     # Verify the patching worked
     print("MistralAttention patched to:", transformers.models.mistral.modeling_mistral.MistralAttention.__name__)
     print("MistralFlashAttention2 patched to:", transformers.models.mistral.modeling_mistral.MistralFlashAttention2.__name__)
-    # print("LlamaAttention patched to:", transformers.models.llama.modeling_llama.LlamaAttention.__name__)
-    # print("LlamaFlashAttention2 patched to:", transformers.models.llama.modeling_llama.LlamaFlashAttention2.__name__)
-    # print("Qwen2Attention patched to:", transformers.models.qwen2.modeling_qwen2.Qwen2Attention.__name__)
-    # print("Qwen2FlashAttention2 patched to:", transformers.models.qwen2.modeling_qwen2.Qwen2FlashAttention2.__name__)
-    # print("Phi3Attention patched to:", transformers.models.phi3.modeling_phi3.Phi3Attention.__name__)   
-    # print("Phi3FlashAttention2 patched to:", transformers.models.phi3.modeling_phi3.Phi3FlashAttention2.__name__)
+    print("LlamaAttention patched to:", transformers.models.llama.modeling_llama.LlamaAttention.__name__)
+    print("LlamaFlashAttention2 patched to:", transformers.models.llama.modeling_llama.LlamaFlashAttention2.__name__)
+    print("Qwen2Attention patched to:", transformers.models.qwen2.modeling_qwen2.Qwen2Attention.__name__)
+    print("Qwen2FlashAttention2 patched to:", transformers.models.qwen2.modeling_qwen2.Qwen2FlashAttention2.__name__)
+    print("Phi3Attention patched to:", transformers.models.phi3.modeling_phi3.Phi3Attention.__name__)
+    print("Phi3FlashAttention2 patched to:", transformers.models.phi3.modeling_phi3.Phi3FlashAttention2.__name__)
     
     print("DynamicCache patched to:", transformers.cache_utils.DynamicCache.__name__)
     print("GenerationMixin patched to:", transformers.generation.utils.GenerationMixin.__name__)
