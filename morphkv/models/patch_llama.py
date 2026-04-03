@@ -251,10 +251,10 @@ class LlamaAttentionMorph(nn.Module):
         
         if(key_heads!=query_heads):
             #For GQA, we have seperate masks for attention and KVs
-            past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
+            past_key_value.cleanup(init_mask_kv,self.layer_idx) 
         else: 
             raise ValueError("MHA not supported yet: key_heads should not be equal to query_heads")
-            past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
+            past_key_value.cleanup(init_mask_attn,self.layer_idx)
         
         # absolutely no reason to mask the current scores, let the first decoded token attend to full KV cache
         # return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
@@ -502,7 +502,7 @@ class LlamaAttentionMorph(nn.Module):
             else: self.garbage[self.layer_idx] = True
             
         else:
-            past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
+            past_key_value.cleanup(None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
             attn_weights = attn_weights[:,:,-1:,...] # only attend to the last token
         
         # masking if needed
@@ -675,7 +675,7 @@ class LlamaFlashAttention2Morph(LlamaAttentionMorph):
         # cache win queries after attn output
         query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-(self.WIN_SIZE+1):,:],self.layer_idx)
 
-        past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
+        past_key_value.cleanup(None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
 
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)

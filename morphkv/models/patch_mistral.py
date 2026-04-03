@@ -20,9 +20,7 @@
 """PyTorch Mistral model."""
 
 import math
-import os
 from typing import List, Optional, Tuple, Union
-import gc
 
 import torch
 import torch.utils.checkpoint
@@ -50,7 +48,6 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers.models.mistral.configuration_mistral import MistralConfig
-from transformers.snapkv_utils import init_snapkv
 
 if is_flash_attn_2_available():
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
@@ -210,128 +207,62 @@ class MistralAttention(nn.Module):
             max_position_embeddings=self.max_position_embeddings,
             base=self.rope_theta,
         )
-        self.hopf = "no_hopf"
-        self.SOFTMAX_TYPE = 'normal'
-        self.garbage = [True]*config.num_hidden_layers
+        self.garbage = [True] * config.num_hidden_layers
         self.WIN_SIZE = 3
-        self.SIM_THRESH = 10
-        self.hopf_type = ""
-
-        self.config.snapkv = None
-        self.config.hopformer = self.config.morphkv
+        self.morph_type = ""
 
         if config.morphkv:
-            self.hopf = "hopf"
             self.WIN_SIZE = int(config.morphkv['window_size'])
-            # self.SIM_THRESH = config.hopformer['sim_threshold']
             self.MAX_CAPACITY = int(config.morphkv['max_capacity'])
-            self.SIM_THRESH = (self.MAX_CAPACITY - self.WIN_SIZE) / self.WIN_SIZE
-            self.SOFTMAX_TYPE = 'normal'
-            self.NUM_ATTN_SINKS = 0
-            self.hopf_type = config.morphkv['morph_type'] 
+            self.morph_type = config.morphkv['morph_type']
             self.evict_after = 1.0
-            self.window_queries = [None]*self.config.num_hidden_layers
-            #'indp' - each head has its seperate set of idx
-            #'merged': union across all heads
-            #'max_fused' - for every head, we take topk among the max(scores[:win_size]), ie, fuse attn scores of all win tokens using max func
-            #'sum_fused' - for every head, we take topk among the sum(scores[:win_size]), ie, fuse attn scores of all win tokens using sum func
-    
-    @staticmethod
-    def profile_event():
-        return torch.cuda.Event(enable_timing=True)
+            self.window_queries = [None] * self.config.num_hidden_layers
 
-    @staticmethod
-    def measure_time(start_event, end_event, label, layer_id):
-        torch.cuda.synchronize()
-        elapsed = start_event.elapsed_time(end_event)
-        if layer_id==8: print(f"{label}: {elapsed:.3f} ms")
+    def _compute_importance_mask(self, softmax_scores, scores, num_heads, k, for_kv):
+        """Computes a mask with -inf for evicted positions and 0.0 for retained top-k positions.
 
-    def hopformer_mask(self, scores, causal_mask, past_key_value, key_heads, query_heads):
-        # import pdb; pdb.set_trace()
-        # h1_s, h1_e = self.profile_event(),self.profile_event()
-        # h2_s, h2_e = self.profile_event(),self.profile_event()
-        # h3_s, h3_e = self.profile_event(),self.profile_event()
-        # h4_s, h4_e = self.profile_event(),self.profile_event()
+        For GQA KV masks (for_kv=True), groups query heads and reduces via max before aggregation.
+        Aggregation across window tokens uses max (max_fused) or sum (sum_fused) based on self.morph_type.
+        """
+        bs = softmax_scores.shape[0]
+        pre_win_seq = softmax_scores.shape[-1]
+        full_seq = scores.shape[-1]
 
-        if past_key_value.attn_cache[self.layer_idx]!=[]:
-            # h1_s.record()
-            if "h2o" in self.hopf_type:
-                soft_scores = nn.functional.softmax(scores,dim=-1)
-                soft_scores[:,:,:,:past_key_value.attn_cache[self.layer_idx].shape[-1]] += past_key_value.attn_cache[self.layer_idx]
-                past_key_value.attn_cache[self.layer_idx] = soft_scores
-            else:
-                scores = torch.cat([past_key_value.attn_cache[self.layer_idx],scores],dim=2) 
-                #TODO: Unique head implementation next 1 line
-                if self.hopf_type=='indp': scores[:,:,-1,-1] = -torch.inf
-            # h1_e.record()
-            # self.measure_time(h1_s, h1_e, "Hopf 1: ",self.layer_idx)
-        # init_mask =  torch.full_like(scores[:,:,-1:,:], -torch.inf) #work only on the last row
+        if for_kv and num_heads < softmax_scores.shape[1]:
+            grouped = softmax_scores.view(bs, num_heads, -1, softmax_scores.shape[2], pre_win_seq)
+            window_scores = grouped.max(dim=2)[0]
+        else:
+            window_scores = softmax_scores
 
-        # torch.eq compares where sim_tokens have 0.0 filled by the topk positions
-        # torch.any makes an index true if any of the window token has that index as true, hence dim = 2 (ie, the window dimension)
-        # torch.where fills all true indices with 0.0 and others with -inf
-        softmax_scores = nn.functional.softmax(scores[:, :, -(self.WIN_SIZE+1):-1, :-(self.WIN_SIZE+1)],dim=-1)
-        if(key_heads!=query_heads):
-            #TODO: For GQA, we reduce scores by summing over grouped heads -> changed to taking max over grouped heads
-            # h2_s.record()
-            if self.hopf_type=='indp': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-(self.WIN_SIZE+1):-1,:], -torch.inf) #work with last WIN_SIZE+1 tokens, exclude the current token    
-                init_mask_kv = torch.where(torch.any(torch.eq(sim_tokens.scatter_(-1,torch.topk(scores.view(scores.shape[0],key_heads,-1,scores.shape[2],scores.shape[3]).sum(dim=2)[:, :, -(self.WIN_SIZE+1):-1], dim=-1, k=self.SIM_THRESH).indices,0.0),0),dim=2,keepdim=True),0.0,-torch.inf)
-            elif "max" in self.hopf_type or self.hopf_type=='max_fused': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-            elif "sum" in self.hopf_type or self.hopf_type=='sum_fused': 
-                sim_tokens = torch.full_like(scores[:,:key_heads,-2:-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-                init_mask_kv = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.view(softmax_scores.shape[0],key_heads,-1,softmax_scores.shape[2],softmax_scores.shape[3]).max(dim=2)[0].sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-            init_mask_kv[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
-            # h2_e.record()
-            # self.measure_time(h2_s, h2_e, "Hopf 2: ",self.layer_idx)
+        if "max" in self.morph_type:
+            importance = window_scores.max(dim=2, keepdim=True)[0]
+        else:
+            importance = window_scores.sum(dim=2, keepdim=True)
 
-        # h3_s.record()
-        # init_mask_attn = None
-        if self.hopf_type=='indp': 
-            sim_tokens = torch.full_like(scores[:,:,-(self.WIN_SIZE+1):-1,:], -torch.inf) #work with last WIN_SIZE+1 tokens, exclude the current token
-            init_mask_attn = torch.where(torch.any(torch.eq(sim_tokens.scatter_(-1,torch.topk(scores[:, :, -(self.WIN_SIZE+1):-1], dim=-1, k=self.SIM_THRESH).indices,0.0),0),dim=2,keepdim=True),0.0,-torch.inf)
-        elif "max" in self.hopf_type or self.hopf_type=='max_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.max(dim=2, keepdim=True)[0], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        elif "sum" in self.hopf_type or self.hopf_type=='sum_fused': 
-            sim_tokens = torch.full_like(scores[:,:,-(1+1):-1,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(softmax_scores.sum(dim=2, keepdim=True), dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        if "h2o" in self.hopf_type: 
-            sim_tokens = torch.full_like(scores[:,:,-1:,:], -torch.inf) #work with last 1 tokens as we will fuse all window tokens into 1, exclude the current token
-            init_mask_attn = sim_tokens[:,:,-1:].scatter_(-1,torch.topk(soft_scores[:, :, :, :-(self.WIN_SIZE+1)], dim=-1, k=self.MAX_CAPACITY-self.WIN_SIZE).indices,0.0)
-        init_mask_attn[:, :, -1, -(self.WIN_SIZE+1):] = 0.0  # attends to all window tokens and itself
-        # h3_e.record()
-        # self.measure_time(h3_s, h3_e, "Hopf 3: ",self.layer_idx)
+        mask = torch.full(
+            (bs, num_heads, 1, full_seq), -torch.inf,
+            device=scores.device, dtype=scores.dtype
+        )
+        mask.scatter_(-1, torch.topk(importance, dim=-1, k=k).indices, 0.0)
+        return mask
 
-        #Comment below 1 line to enable unique set for each head
-        #TODO: Currently implemented only for ws = 1
-        #TODO: Unique head implementation next 1 line - init_mask (BS, N_HEADS, WIN_SIZE, SEQ_LEN)
-        if self.hopf_type=='merged': init_mask = torch.where(torch.any(init_mask==0.0,dim=1,keepdim=True),0.0,-torch.inf).repeat(1,32,1,1)
-        # init_mask[:, :, -1, self.get_useful_idx(sim_tokens.scatter_(-1,torch.topk(scores[:, :, -(self.WIN_SIZE+1):-1], dim=-1, k=self.SIM_THRESH).indices,0.0))] = 0.0
+    def morphkv_mask(self, scores, past_key_value, key_heads, query_heads):
+        softmax_scores = nn.functional.softmax(
+            scores[:, :, -(self.WIN_SIZE + 1):-1, :-(self.WIN_SIZE + 1)], dim=-1
+        )
+        k = self.MAX_CAPACITY - self.WIN_SIZE
 
-        if self.NUM_ATTN_SINKS>0:
-            init_mask[:,:,-1,0:self.NUM_ATTN_SINKS] = 0.0 #allow every token to attend to first SINK num of tokens
-        # preserve_indices = self.get_useful_idx(init_mask[:,:,-1:])
-        # h4_s.record()
-        if(key_heads!=query_heads):
-            #TODO: For GQA, we reduce scores by summing over grouped heads
-            past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
-        else: past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx) 
-        # h4_e.record()
-        # self.measure_time(h4_s, h4_e, "Hopf 4: ",self.layer_idx)
-        # if "h2o" in self.hopf_type: 
-        return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn    
-        # return (repeat_kv(init_mask_kv,query_heads//key_heads) + scores[:,:,-1:,:]), init_mask_attn
-    
-    # def update_win_queries(self, win_queries, layer_idx):
-    #     if(self.window_queries[layer_idx]==None):
-    #         self.window_queries[layer_idx] = win_queries
-    #     else:
-    #         self.window_queries[layer_idx] = torch.roll(self.window_queries[layer_idx],shifts=-1, dims=2)
-    #         self.window_queries[layer_idx][...,-1:,:] = win_queries
-    #     return self.window_queries[layer_idx]
+        attn_mask = self._compute_importance_mask(softmax_scores, scores, query_heads, k, for_kv=False)
+        attn_mask[:, :, -1, -(self.WIN_SIZE + 1):] = 0.0
+
+        if key_heads != query_heads:
+            kv_mask = self._compute_importance_mask(softmax_scores, scores, key_heads, k, for_kv=True)
+            kv_mask[:, :, -1, -(self.WIN_SIZE + 1):] = 0.0
+            past_key_value.cleanup(kv_mask, self.layer_idx)
+        else:
+            past_key_value.cleanup(attn_mask, self.layer_idx)
+
+        return (attn_mask + scores[:, :, -1:, :]), attn_mask
 
     def forward(
         self,
@@ -344,17 +275,9 @@ class MistralAttention(nn.Module):
         cache_position: Optional[torch.LongTensor] = None,
         query_cache: List = None
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        
+
         self.window_queries = query_cache
 
-        # attn_start, attn_end = self.profile_event(), self.profile_event()
-        # hopformer_start, hopformer_end = self.profile_event(), self.profile_event()
-        # hopformer_cache_start, hopformer_cache_end = self.profile_event(), self.profile_event()
-
-        # torch.cuda.synchronize()
-        # attn_start.record()
-        
-        # import pdb; pdb.set_trace()
         bsz, q_len, _ = hidden_states.size()
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
@@ -370,122 +293,33 @@ class MistralAttention(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            # if self.layer_idx==0:
-            #     import pdb; pdb.set_trace()
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            if self.config.snapkv or "h2o" in self.hopf_type:
-                key_states = repeat_kv(key_states, self.num_key_value_groups)
-                value_states = repeat_kv(value_states, self.num_key_value_groups)
-                query_heads = query_states.shape[1]
-                key_heads = key_states.shape[1]
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, None, cache_kwargs)
 
-        if key_states.shape[1]!=query_states.shape[1]:
+        if key_states.shape[1] != query_states.shape[1]:
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
-        if self.config.hopformer and "h2o" not in self.hopf_type: # cache queries for hopformer only
-            query_states = past_key_value.update_win_queries(query_states[:,:,-self.WIN_SIZE:,:],self.layer_idx)
+        if self.config.morphkv:
+            query_states = past_key_value.update_win_queries(query_states[:, :, -self.WIN_SIZE:, :], self.layer_idx)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        if past_key_value.cache_size['len']%100==0 and "profile" in self.hopf_type:
-            if self.layer_idx==0:
-                print(past_key_value.attn_cache[self.layer_idx].shape)
-            os.makedirs("/work/10198/ghadiaravi13/vista/HopFormer/LongWriter_Test/evaluation/attn_wts/", exist_ok=True)
-            torch.save(past_key_value.attn_cache[self.layer_idx],f"/work/10198/ghadiaravi13/vista/HopFormer/LongWriter_Test/evaluation/attn_wts/mistral_ws{self.WIN_SIZE}_st{self.SIM_THRESH}_fused{self.hopf_type}_Layer_{self.layer_idx}_attn_{past_key_value.cache_size['len']}.pt")
-        
-        # if self.layer_idx==0:
-        #     import pdb; pdb.set_trace()
-        # query_heads = query_states.shape[1]
-        # key_heads = key_states.shape[1]
-        # use hopformer only in generative phase, ie, when hidden states has 1 token (the newly generated)
-        if self.config.hopformer and key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after:
-            # hopformer_start.record()
-            # import pdb; pdb.set_trace()
-            if hidden_states.shape[1]==1:
-                # if(self.layer_idx==0):
-                    # print(f"Evicting at KV Size: {key_states.shape[2]}")
-                causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] if attention_mask is not None else None
-                attn_weights, init_mask = self.hopformer_mask(attn_weights, causal_mask, past_key_value, key_heads, query_heads)#>0)
-                
-                # hopformer call must have emptied KV Cache, so cleanup!
-                if self.garbage[self.layer_idx]==True:
+        if self.config.morphkv and key_states.shape[2] >= (1 + self.MAX_CAPACITY) * self.evict_after:
+            if hidden_states.shape[1] == 1:
+                attn_weights, init_mask = self.morphkv_mask(attn_weights, past_key_value, key_heads, query_heads)
+                if self.garbage[self.layer_idx]:
                     torch.cuda.empty_cache()
                     past_key_value.cleaned[self.layer_idx] = True
                     self.garbage[self.layer_idx] = False
-            # seems like a new sequence, reset garbage variable to true        
-            else: self.garbage[self.layer_idx] = True
-            # hopformer_end.record()
+            else:
+                self.garbage[self.layer_idx] = True
         else:
-            past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
-        if attention_mask is not None:  # no matter the length, we just slice it
+            past_key_value.cleanup(None, self.layer_idx, dummy=True)
+        if attention_mask is not None:
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
 
-        if self.config.hopformer:
-            #cache attn weights in past key value
-            # hopformer_cache_start.record()
-            if past_key_value.attn_cache[self.layer_idx]==[]:
-                # need to add another column to attn matrix to account for next token
-                
-                pass # no caching of attn
-                
-                #TODO: Unique head implementation next 2 lines
-                # if self.hopf_type=='indp': 
-                #     for i in range(1,min(attn_weights.shape[-1],self.WIN_SIZE)+1):
-                #         attn_weights[:,:,-i,-i] = -torch.inf
-                # if "h2o" in self.hopf_type:
-                #     past_key_value.attn_cache[self.layer_idx] = nn.functional.softmax(attn_weights,dim=-1)
-                # else:
-                #     print("Error with below implementation, expected to use Flash attn for prefilling!!!")
-                    # bs,n_heads,cache_len,cache_len = attn_weights.shape                
-                    # past_key_value.attn_cache[self.layer_idx] = torch.cat([attn_weights[:,:,-self.WIN_SIZE:],torch.full((bs,n_heads,min(self.WIN_SIZE,cache_len),1),-torch.inf).to(attn_weights.device)],dim=-1)
-            elif False:
-                # import pdb;pdb.set_trace()
-                if "h2o" in self.hopf_type:
-                    pass
-                    # bs, n_heads, win_size, seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                    # prev_attn_cache = past_key_value.attn_cache[self.layer_idx]
-                    # past_key_value.attn_cache[self.layer_idx] = attn_weights.transpose(3,2)[init_mask.squeeze(2)==0].view(bs, n_heads, -1, 1).transpose(3,2)
-                    # past_key_value.attn_cache[self.layer_idx][:,:,:,:-1] += prev_attn_cache
-                else:
-                    if key_states.shape[2]>= (1 + self.MAX_CAPACITY) * self.evict_after: # only then the init mask would have been calculated
-                        bs, n_heads, win_size, seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                        self.evict_after = self.config.hopformer['evict_after'] # after the first eviction, evict only after 'exhale_after' factor times KV size is reached
-                        #past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx][:,:,1:], attn_weights.transpose(3,2)[init_mask.squeeze(2)==0].view(bs, n_heads, -1, 1).transpose(3,2)],dim=2)
-                        # remove the row corresponding to oldest window, and append the newly generated attn weight profile
-                        past_key_value.attn_cache[self.layer_idx] = torch.roll(past_key_value.attn_cache[self.layer_idx],shifts=-1,dims=2)
-                        past_key_value.attn_cache[self.layer_idx][:, :, -1:] = attn_weights.transpose(3,2)[init_mask.squeeze(2)==0].view(bs, n_heads, -1, 1).transpose(3,2)
-                        
-                        # # left shift along the seq_len dimension, make the last column -inf
-                        # past_key_value.attn_cache[self.layer_idx][:, :, :, :-1] = past_key_value.attn_cache[self.layer_idx][:, :, :, 1:]
-                        # past_key_value.attn_cache[self.layer_idx][:, :, :, -1] = -torch.inf
-                    else:
-                        if key_states.shape[2]<=self.WIN_SIZE:
-                            past_key_value.attn_cache[self.layer_idx][:,:,key_states.shape[2]-1:key_states.shape[2],:] = attn_weights
-                        else:
-                            past_key_value.attn_cache[self.layer_idx] = torch.roll(past_key_value.attn_cache[self.layer_idx],shifts=-1,dims=2) #shift up by 1 position on the 2nd dim
-                            #TODO: LEADS TO MEMORY CORRUPTION!!! # past_key_value.attn_cache[self.layer_idx][:, :, :(self.WIN_SIZE-1)] = past_key_value.attn_cache[self.layer_idx][:, :, -(self.WIN_SIZE-1):]
-                            past_key_value.attn_cache[self.layer_idx][:, :, -1:] = attn_weights
-                        #past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx], attn_weights],dim=2)
-                        bs, n_heads, win_size, seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                        # past_key_value.attn_cache[self.layer_idx][:, :, :(self.WIN_SIZE-1)] = past_key_value.attn_cache[self.layer_idx][:, :, -(self.WIN_SIZE-1):]
-                        # past_key_value.attn_cache[self.layer_idx][:, :, -1:, :attn_weights.shape[-1]] = attn_weights
-                        # if past_key_value.attn_cache[self.layer_idx].shape[2] < (1 + self.WIN_SIZE + (self.WIN_SIZE*self.SIM_THRESH)):
-                        #     # pad attn cache upto max possible seq_len for hopformer
-                        #     past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx],torch.full((bs,n_heads,win_size,(1 + self.WIN_SIZE + (self.WIN_SIZE*self.SIM_THRESH))-past_key_value.attn_cache[self.layer_idx].shape[2]),-torch.inf).to(past_key_value.attn_cache[self.layer_idx].device)],dim=-1)
-                    # need to add another column to attn matrix to account for next token
-                    # bs,n_heads,win_size,seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                    # if "h2o" not in self.hopf_type:
-                    past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx],torch.full((bs,n_heads,win_size,1),-torch.inf).to(past_key_value.attn_cache[self.layer_idx].device)],dim=-1)
-            # hopformer_cache_end.record()    
-            # print(f".........Layer: {self.layer_idx} attn cached........")
-
         # upcast attention to fp32
-        if self.SOFTMAX_TYPE=='gumbel':
-            attn_weights = nn.functional.gumbel_softmax(attn_weights, dim=-1).to(query_states.dtype)
-        else:
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
@@ -502,15 +336,6 @@ class MistralAttention(nn.Module):
 
         if not output_attentions:
             attn_weights = None
-        
-        # torch.cuda.synchronize()
-        # attn_end.record()
-
-
-        # if self.config.hopformer:
-        #     self.measure_time(hopformer_start, hopformer_end, "Hopformer Mask Segment", self.layer_idx)
-        #     self.measure_time(hopformer_cache_start, hopformer_cache_end, "Hopformer Cache Segment", self.layer_idx)
-        # self.measure_time(attn_start, attn_end, "Total Attention\n- - - - - - - - - - - - - - - - - - - \n", self.layer_idx)
 
         return attn_output, attn_weights, past_key_value
 
@@ -530,14 +355,6 @@ class MistralFlashAttention2(MistralAttention):
         # flash_attn<2.1 generates top-left aligned causal mask, while what is needed here is bottom-right alignement, that was made default for flash_attn>=2.1. This attribute is used to handle this difference. Reference: https://github.com/Dao-AILab/flash-attention/releases/tag/v2.1.0.
         # Beware that with flash_attn<2.1, using q_seqlen != k_seqlen (except for the case q_seqlen == 1) produces a wrong mask (top-left).
         self._flash_attn_uses_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
-    
-    # def update_win_queries(self, win_queries, layer_idx):
-    #     if(self.window_queries[layer_idx]==None):
-    #         self.window_queries[layer_idx] = win_queries
-    #     else:
-    #         self.window_queries[layer_idx] = torch.roll(self.window_queries[layer_idx],shifts=-1, dims=2)
-    #         self.window_queries[layer_idx][...,-1:,:] = win_queries
-    #     return self.window_queries[layer_idx] 
 
     def forward(
         self,
@@ -554,28 +371,13 @@ class MistralFlashAttention2(MistralAttention):
                 "`static` cache implementation is not compatible with `attn_implementation==flash_attention_2` "
                 "make sure to use `sdpa` in the mean time, and open an issue at https://github.com/huggingface/transformers"
             )
-        
-        # flash_attn_start, flash_attn_end = self.profile_event(), self.profile_event()
-        # flash_snap1_start, flash_snap1_end = self.profile_event(), self.profile_event()
-        # flash_snap2_start, flash_snap2_end = self.profile_event(), self.profile_event()
-        # flash_hopformer_start, flash_hopformer_end = self.profile_event(), self.profile_event()
-        # flash_hopformer_cache_start, flash_hopformer_cache_end = self.profile_event(), self.profile_event()
 
-        # torch.cuda.synchronize()
-        # flash_attn_start.record()
-        
-        # import pdb; pdb.set_trace()
-        
-        if self.config.snapkv:
-            # flash_snap1_start.record()
-            init_snapkv(self)
-            # flash_snap1_end.record()
-        if hidden_states.shape[1]==1 and self.layer_idx>-1 and ((self.config.hopformer and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY) or self.config.snapkv):
-            # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
+        # Fall back to eager attention for decode-phase MorphKV eviction
+        if hidden_states.shape[1] == 1 and self.layer_idx > -1 and self.config.morphkv and past_key_value.key_cache[self.layer_idx].shape[2] > self.MAX_CAPACITY:
             logger.warning_once(
-                "MistralModel was using MistralFlashAttention2 for prefilling, which does not support Hopformer KV eviction. Falling back to the eager attention implementation."
+                "MistralModel was using MistralFlashAttention2 for prefilling, which does not support MorphKV eviction. Falling back to the eager attention implementation."
             )
-            return super(MistralFlashAttention2,self).forward(
+            return super(MistralFlashAttention2, self).forward(
                 hidden_states=hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -583,13 +385,12 @@ class MistralFlashAttention2(MistralAttention):
                 output_attentions=output_attentions,
                 use_cache=use_cache,
                 cache_position=cache_position,
-                query_cache=self.window_queries if self.config.hopformer else None,
+                query_cache=self.window_queries if self.config.morphkv else None,
             )
-        
+
         output_attentions = False
-        
-        # reset window queries for every new sequence
-        if(hidden_states.shape[1]!=1):
+
+        if hidden_states.shape[1] != 1:
             past_key_value.query_cache[self.layer_idx] = []
 
         bsz, q_len, _ = hidden_states.size()
@@ -636,24 +437,10 @@ class MistralFlashAttention2(MistralAttention):
                     attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
 
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            if self.config.snapkv:
-                if hidden_states.shape[1]!=1:
-                    # flash_snap2_start.record()
-                    # if self.layer_idx==8:
-                    #     import pdb; pdb.set_trace()
-                    key_states = repeat_kv(key_states, self.num_key_value_groups)
-                    value_states = repeat_kv(value_states, self.num_key_value_groups)
-                    key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)
-                    past_key_value.update(key_states_compress, value_states_compress, self.layer_idx, None, cache_kwargs)
-                    # flash_snap2_end.record()
-            else:
-                if "h2o" in self.hopf_type:
-                    key_states = repeat_kv(key_states, self.num_key_value_groups)
-                    value_states = repeat_kv(value_states, self.num_key_value_groups)
-                key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, None, cache_kwargs)
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, None, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
-        if key_states.shape[1]<query_states.shape[1]:
+        if key_states.shape[1] < query_states.shape[1]:
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
         dropout_rate = 0.0 if not self.training else self.attention_dropout
@@ -699,101 +486,16 @@ class MistralFlashAttention2(MistralAttention):
             is_causal=self.is_causal,
         )
 
-        # cache win queries
-        query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-self.WIN_SIZE:,:],self.layer_idx)
+        # Cache window queries for MorphKV scoring in subsequent decode steps
+        past_key_value.update_win_queries(query_states.transpose(1, 2)[..., -self.WIN_SIZE:, :], self.layer_idx)
 
-        if self.config.hopformer and self.layer_idx>-1 and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY:
-            # flash_hopformer_start.record()
-            # query_states = query_states.transpose(1, 2)
-            # query_states = self.update_win_queries(query_states[...,-self.WIN_SIZE:,:],self.layer_idx)
-            key_states = key_states.transpose(1, 2)
-            if "h2o" in self.hopf_type:
-                attn_weights = nn.functional.softmax(torch.matmul(query_states[:,:,-self.MAX_CAPACITY:,:], key_states.transpose(2, 3)) / math.sqrt(self.head_dim),dim=-1)
-                attn_weights = torch.tril(attn_weights,diagonal=max(attn_weights.shape[-1]-(self.MAX_CAPACITY),0))
-                attn_weights = attn_weights.sum(dim=2, keepdim=True)
-            else:    
-                attn_weights = torch.matmul(query_states[:,:,-self.WIN_SIZE:,:], key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-            # flash_hopformer_end.record()
-
-        # use hopformer only in generative phase, ie, when hidden states has 1 token (the newly generated)
-        if self.config.hopformer and self.layer_idx>-1 and key_states.shape[2]>= 1 + self.MAX_CAPACITY and False:
-            # import pdb; pdb.set_trace()
-            if hidden_states.shape[1]==1:
-                causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-                attn_weights, init_mask = self.hopformer_mask(attn_weights, causal_mask, past_key_value, key_heads, query_heads)#>0)
-                # hopformer call must have emptied KV Cache, so cleanup!
-                if self.garbage[self.layer_idx]==True:
-                    torch.cuda.empty_cache()
-                    # gc.collect()
-                    past_key_value.cleaned[self.layer_idx] = True
-                    self.garbage[self.layer_idx] = False
-            # seems like a new sequence, reset garbage variable to true        
-            else: self.garbage[self.layer_idx] = True
-        else:
-            past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
-
-        # store attn cache only if you know you will be running hopformer at the next step
-        if self.config.hopformer and self.layer_idx>-1 and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY:# and key_states.shape[2]>=(self.WIN_SIZE*self.SIM_THRESH):
-            #cache attn weights in past key value
-            # flash_hopformer_cache_start.record()
-            if past_key_value.attn_cache[self.layer_idx]==[]:
-                # need to add another column to attn matrix to account for next token
-                # import pdb; pdb.set_trace()
-
-                #TODO: Unique head implementation next 2 lines
-                #TODO: Commented below for query caching instead of attn caching
-                # if self.hopf_type=='indp': 
-                #     for i in range(1,min(attn_weights.shape[-1],self.WIN_SIZE)+1):
-                #         attn_weights[:,:,-i,-i] = -torch.inf
-                if "h2o" in self.hopf_type:
-                    bs,n_heads,cache_len,cache_len = attn_weights.shape                
-                    past_key_value.attn_cache[self.layer_idx] = attn_weights#torch.cat([nn.functional.softmax(attn_weights[:,:,-1:,:],dim=-1),torch.full((bs,n_heads,1,1),0).to(attn_weights.device)],dim=-1)
-                # else:
-                #     bs,n_heads,win_len,cache_len = attn_weights.shape                
-                #     assert win_len>=self.WIN_SIZE, f"Not enough tokens ({win_len}) for the given window size ({self.WIN_SIZE})\n"
-                #     # if win_len<self.WIN_SIZE:    
-                #     #     attn_weights = torch.cat([attn_weights,torch.full((bs,n_heads,self.WIN_SIZE-win_len,cache_len),-torch.inf).to(attn_weights.device)],dim=2)
-                #     past_key_value.attn_cache[self.layer_idx] = torch.cat([attn_weights[:,:,-self.WIN_SIZE:,:],torch.full((bs,n_heads,self.WIN_SIZE,1),-torch.inf).to(attn_weights.device)],dim=-1)
-                #TODO: Commented above for query caching instead of attn caching
-
-            elif False:
-                import pdb;pdb.set_trace()
-                bs, n_heads, win_size, seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                if key_states.shape[2]>= 1 + self.MAX_CAPACITY: # only then the init mask would have been calculated
-                    past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx][:,:,1:], attn_weights.transpose(3,2)[init_mask.squeeze(2)==0].view(bs, n_heads, -1, 1).transpose(3,2)],dim=2)
-                else:
-                    past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx][:,:,1:], attn_weights],dim=2)
-                # need to add another column to attn matrix to account for next token
-                # bs,n_heads,win_size,seq_len = past_key_value.attn_cache[self.layer_idx].shape
-                past_key_value.attn_cache[self.layer_idx] = torch.cat([past_key_value.attn_cache[self.layer_idx],torch.full((bs,n_heads,win_size,1),-torch.inf).to(past_key_value.attn_cache[self.layer_idx].device)],dim=-1)
-            # flash_hopformer_cache_end.record()
-            # print(f".........Layer: {self.layer_idx} attn cached........")
-
-        # # upcast attention to fp32
-        # if self.SOFTMAX_TYPE=='gumbel':
-        #     attn_weights = nn.functional.gumbel_softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        # else:
-        #     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        past_key_value.cleanup(None, self.layer_idx, dummy=True)
 
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
-        
-        # torch.cuda.synchronize()
-        # flash_attn_end.record()
-
-        # if self.layer_idx==8:
-        #     print("\n- - - - - - - - - - - - - - - - - - - \n")
-        # if self.config.snapkv:
-        #     self.measure_time(flash_snap1_start, flash_snap1_end, "Flash SnapKV Init Segment", self.layer_idx)
-        #     if hidden_states.shape[1]!=1:
-        #         self.measure_time(flash_snap2_start, flash_snap2_end, "Flash SnapKV evict Segment", self.layer_idx)
-        # if self.config.hopformer and past_key_value.key_cache[self.layer_idx].shape[2]>self.MAX_CAPACITY:
-        #     self.measure_time(flash_hopformer_start, flash_hopformer_end, "Flash Hopf Partial Attn wts Segment", self.layer_idx)
-        #     self.measure_time(flash_hopformer_cache_start, flash_hopformer_cache_end, "Flash Hopformer Cache Segment", self.layer_idx)
-        # self.measure_time(flash_attn_start, flash_attn_end, "Flash Attention", self.layer_idx)
 
         return attn_output, attn_weights, past_key_value
 

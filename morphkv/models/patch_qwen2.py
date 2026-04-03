@@ -262,10 +262,10 @@ class Qwen2AttentionMorph(nn.Module):
         
         if(key_heads!=query_heads):
             #For GQA, we have seperate masks for attention and KVs
-            past_key_value.cleanup(init_mask_kv,init_mask_attn,self.layer_idx) 
+            past_key_value.cleanup(init_mask_kv,self.layer_idx) 
         else: 
             raise ValueError("MHA not supported yet: key_heads should not be equal to query_heads")
-            past_key_value.cleanup(init_mask_attn,init_mask_attn,self.layer_idx)
+            past_key_value.cleanup(init_mask_attn,self.layer_idx)
         
         # absolutely no reason to mask the current scores, let the first decoded token attend to full KV cache
         # return (init_mask_attn + scores[:,:,-1:,:]), init_mask_attn
@@ -493,7 +493,7 @@ class Qwen2AttentionMorph(nn.Module):
             else: self.garbage[self.layer_idx] = True
             
         else:
-            past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
+            past_key_value.cleanup(None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
@@ -677,7 +677,7 @@ class Qwen2FlashAttention2Morph(Qwen2AttentionMorph):
         # cache win queries after attn output
         query_states = past_key_value.update_win_queries(query_states.transpose(1,2)[...,-(self.WIN_SIZE+1):,:],self.layer_idx)
 
-        past_key_value.cleanup(None,None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
+        past_key_value.cleanup(None,self.layer_idx,dummy=True) ## just for the sake of profiling memory
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
