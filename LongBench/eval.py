@@ -93,7 +93,7 @@ if __name__ == '__main__':
     all_files = os.listdir(path)
     print("Evaluating on:", all_files)
     for filename in all_files:
-        if not filename.endswith("jsonl") or "gov" in filename:
+        if not filename.endswith("jsonl"): # or "gov" in filename:
             continue
         predictions, answers, lengths = [], [], []
         dataset = ".".join(filename.split('.')[:-1])
@@ -103,6 +103,8 @@ if __name__ == '__main__':
             dataset_name = "passage_count"
         elif "multi_news" in filename:
             dataset_name = "multi_news"
+        elif "gov" in filename:
+            dataset_name = "gov_report"
         elif "multi" in filename:
             dataset_name = "_".join(filename.split("_")[:2])
         else: dataset_name = dataset.split('_')[0]
@@ -127,4 +129,14 @@ if __name__ == '__main__':
     else:
         out_path = f"{pred_path}/{args.model}/result.json"
     with open(out_path, "w") as f:
+        # add a geomean field in the scores dictionary, compute only for non-zero scores
+        non_zero_scores = [score for score in scores.values() if score != 0]
+        if len(non_zero_scores) > 0:
+            scores["geomean"] = np.prod(non_zero_scores) ** (1/len(non_zero_scores))
+        else:
+            scores["geomean"] = 0
+
+        # sort scores by key
+        scores = dict(sorted(scores.items(), key=lambda x: x[0]))
+
         json.dump(scores, f, ensure_ascii=False, indent=4)

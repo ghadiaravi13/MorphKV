@@ -3,13 +3,13 @@ import transformers
 from transformers.generation.configuration_utils import NEED_SETUP_CACHE_CLASSES_MAPPING, NEEDS_CACHE_CONFIG
 import transformers.generation.configuration_utils as config_utils
 
-from morphkv.models.patch_mistral import MistralAttentionMorph, MistralFlashAttention2Morph, mistral_model_forward
+from morphkv.models.patch_mistral import MistralAttention as MistralAttentionMorph, MistralFlashAttention2 as MistralFlashAttention2Morph, MistralModel as MistralModelMorph
 from morphkv.models.patch_llama import LlamaAttentionMorph, LlamaFlashAttention2Morph, llama_model_forward
 from morphkv.models.patch_qwen2 import Qwen2AttentionMorph, Qwen2FlashAttention2Morph, qwen2_model_forward
 from morphkv.models.patch_phi3 import Phi3AttentionMorph, Phi3FlashAttention2Morph, phi3_model_forward
 
-from morphkv.morph_cache import MorphOffloadedCache
-from morphkv.gen_utils import morph_sample
+from morphkv.morph_cache import OffloadedCache as MorphOffloadedCache
+from morphkv.gen_utils import GenerationMixin as GenerationMixinMorph
 
 
 
@@ -17,7 +17,8 @@ def patch_mistral():
     # Patch the individual class references
     transformers.models.mistral.modeling_mistral.MistralAttention = MistralAttentionMorph
     transformers.models.mistral.modeling_mistral.MistralFlashAttention2 = MistralFlashAttention2Morph
-    transformers.models.mistral.modeling_mistral.MistralModel.forward = mistral_model_forward
+    transformers.models.mistral.modeling_mistral.MistralModel = MistralModelMorph
+    # transformers.models.mistral.modeling_mistral.MistralModel.forward = mistral_model_forward
     # transformers.cache_utils.DynamicCache = MorphOffloadedCache
     # transformers.generation.utils.GenerationMixin._sample = morph_sample
     
@@ -68,7 +69,7 @@ def patch_phi3():
 def patch_cache():
 
     transformers.cache_utils.DynamicCache = MorphOffloadedCache
-    transformers.generation.utils.GenerationMixin._sample = morph_sample
+    transformers.generation.utils.GenerationMixin._sample = GenerationMixinMorph._sample
     # CRITICAL: Patch the cache mapping for generation
     # Add dynamic cache to the mapping so it uses MorphOffloadedCache
     NEED_SETUP_CACHE_CLASSES_MAPPING["dynamic"] = MorphOffloadedCache
@@ -103,7 +104,7 @@ def patch_morphkv():
     print("LlamaFlashAttention2 patched to:", transformers.models.llama.modeling_llama.LlamaFlashAttention2.__name__)
     print("Qwen2Attention patched to:", transformers.models.qwen2.modeling_qwen2.Qwen2Attention.__name__)
     print("Qwen2FlashAttention2 patched to:", transformers.models.qwen2.modeling_qwen2.Qwen2FlashAttention2.__name__)
-    print("Phi3Attention patched to:", transformers.models.phi3.modeling_phi3.Phi3Attention.__name__)   
+    print("Phi3Attention patched to:", transformers.models.phi3.modeling_phi3.Phi3Attention.__name__)
     print("Phi3FlashAttention2 patched to:", transformers.models.phi3.modeling_phi3.Phi3FlashAttention2.__name__)
     
     print("DynamicCache patched to:", transformers.cache_utils.DynamicCache.__name__)

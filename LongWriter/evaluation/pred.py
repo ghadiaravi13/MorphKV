@@ -26,6 +26,11 @@ def parse_args(args=None):
     parser.add_argument("--evict_after", "-ea", type=float, default=1.0, help="Evict after exceeding this times the KV limit")
     parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
     parser.add_argument("--pred_path", type=str, default="pred")
+
+    parser.add_argument("--fuse_temperature", "-ft", type=float, default=1.0, help="Temperature for fuse")
+    parser.add_argument("--use_attn_offsets", action='store_true', help="Use attn offsets")
+    parser.add_argument("--imp_budget", "-ib", type=float, default=0.5, help="Importance budget for morphkv")
+
     return parser.parse_args(args)
 
 def count_words(text):
@@ -52,7 +57,10 @@ def get_pred(data, path, max_new_tokens, temperature, tokenizer, fout, args):
         'window_size': int(args.window_size),
         'max_capacity': int(args.max_capacity),
         'morph_type': args.morph_type,
-        'evict_after': args.evict_after
+        'evict_after': args.evict_after,
+        'fuse_temperature': args.fuse_temperature,
+        'use_attn_offsets': args.use_attn_offsets,
+        'imp_budget': args.imp_budget
     }
     print(f"morphkv is: {config.morphkv}")
     

@@ -23,6 +23,14 @@ import logging
 import logging.handlers
 from pathlib import Path
 
+DATASET_SPLITS = {
+    1: ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh"],
+    2: ["hotpotqa", "2wikimqa", "musique", "dureader"],
+    3: ["gov_report", "qmsum", "multi_news", "vcsum", "trec"],
+    4: ["triviaqa", "samsum", "lsht", "passage_count"],
+    5: ["passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"],
+}
+
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=None, choices=["phi4-unsloth","phi4","mistral","qwen2.5","llama3.1-8b-instruct","llama2-7b-chat-4k", "llama-2-7B-32k-instruct", "longchat-v1.5-7b-32k", "xgen-7b-8k", "internlm-7b-8k", "chatglm2-6b", "chatglm2-6b-32k", "chatglm3-6b-32k", "vicuna-v1.5-7b-16k"])
@@ -35,7 +43,16 @@ def parse_args(args=None):
     parser.add_argument("--window_size", "-ws", type=int, default=3, help="Window size for morphkv")
     parser.add_argument("--max_capacity", "-mc", type=float, default=100, help="Max cache capacity")
     parser.add_argument("--evict_after", "-ea", type=float, default=1.0, help="Evict after exceeding this times the KV limit")
+    
+    parser.add_argument("--fuse_temperature", "-ft", type=float, default=1.0, help="Temperature for fuse")
     parser.add_argument("--no_morph", action='store_true', help="Disable morphkv")  # Updated line
+    parser.add_argument("--use_attn_offsets", action='store_true', help="Use attn offsets")
+    parser.add_argument("--imp_budget", "-ib", type=float, default=0.5, help="Importance budget for morphkv")
+    parser.add_argument("--pre_rope", "-pr", action='store_true', help="Use pre-rope for morphkv")
+    parser.add_argument("--score_percentile", "-sp", type=float, default=0.9, help="Score percentile for morphkv")
+    parser.add_argument("--batch_size", "-bs", type=int, default=1, help="Batch size for inference (>1 enables batched generation)")
+    parser.add_argument("--dataset_split", "-ds", type=int, default=None, choices=list(DATASET_SPLITS.keys()),
+                        help="Dataset split index (1-5) for parallel execution across machines")
     return parser.parse_args(args)
 
 # This is the customized building prompt for chat models
@@ -69,106 +86,90 @@ def post_process(response, model_name):
         response = response.split("<eoa>")[0]
     return response
 
+def _prepare_prompt(json_obj, prompt_format, model_name, tokenizer, max_length, dataset):
+    """Pre-process a single sample: format, truncate, and apply chat template."""
+    prompt = prompt_format.format(**json_obj)
+    if "qwen" in model_name:
+        prompt = f"[INST]{prompt}[/INST]"
+
+    if "chatglm3" in model_name:
+        tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt", add_special_tokens=False).input_ids[0]
+    else:
+        tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids[0]
+
+    if len(tokenized_prompt) > max_length:
+        half = int(max_length / 2)
+        prompt = tokenizer.decode(tokenized_prompt[:half], skip_special_tokens=True) + \
+                 tokenizer.decode(tokenized_prompt[-half:], skip_special_tokens=True)
+
+    if dataset not in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"]:
+        prompt = build_chat(tokenizer, prompt, model_name)
+
+    return prompt
+
+
 def get_pred(data, max_length, max_gen, prompt_format, dataset, device, model_name, model2path, out_path, args):
     device = torch.device(f'cuda')
     model, tokenizer = load_model_and_tokenizer(model2path[model_name], model_name, device, args)
-    # setup_logging(queue)
     logger = logging.getLogger(__name__)
-    for json_obj in tqdm(data):
-        # try:
-        prompt = prompt_format.format(**json_obj)
-        if "qwen" in model_name:
-            prompt = f"[INST]{prompt}[/INST]"
-            # messages = [
-            #     {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
-            #     {"role": "user", "content": prompt}
-            # ]
-            # prompt = tokenizer.apply_chat_template(
-            #     messages,
-            #     tokenize=False,
-            #     add_generation_prompt=True
-            # )
-        # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
-        tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids[0]
-        if "chatglm3" in model_name:
-            tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt", add_special_tokens=False).input_ids[0]
-        if len(tokenized_prompt) > max_length:
-            half = int(max_length/2)
-            prompt = tokenizer.decode(tokenized_prompt[:half], skip_special_tokens=True)+tokenizer.decode(tokenized_prompt[-half:], skip_special_tokens=True)
-        if dataset not in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"]: # chat models are better off without build prompts on these tasks
-            prompt = build_chat(tokenizer, prompt, model_name)
+
+    batch_size = args.batch_size
+
+    all_prompts = [
+        _prepare_prompt(obj, prompt_format, model_name, tokenizer, max_length, dataset)
+        for obj in data
+    ]
+
+    generate_kwargs = dict(
+        max_new_tokens=max_gen,
+        num_beams=1,
+        do_sample=False,
+        temperature=1.0,
+    )
+    if dataset == "samsum":
+        generate_kwargs['min_new_tokens'] = 1
+        generate_kwargs['eos_token_id'] = [
+            tokenizer.eos_token_id,
+            tokenizer.encode("\n", add_special_tokens=False)[-1],
+        ]
+    elif "phi4" in model_name or "qwen" in model_name:
+        generate_kwargs['min_new_tokens'] = 1
+
+    for batch_start in tqdm(range(0, len(all_prompts), batch_size)):
+        batch_prompts = all_prompts[batch_start : batch_start + batch_size]
+        batch_data = data[batch_start : batch_start + batch_size]
+
         if "chatglm3" in model_name:
             if dataset in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"]:
-                input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
+                inputs = tokenizer(batch_prompts[0], truncation=False, return_tensors="pt").to(device)
             else:
-                input = prompt.to(device)
+                inputs = batch_prompts[0].to(device)
         else:
-            input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
-        context_length = input.input_ids.shape[-1]
-        if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
-            output = model.generate(
-                **input,
-                max_new_tokens=max_gen,
-                num_beams=1,
-                do_sample=False,
-                temperature=1.0,
-                min_length=context_length+1,
-                eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
-            )[0]
-        elif "phi4" in model_name: # prevent illegal output on Phi4 (model starts with EOS, hence generating empty output)
-            output = model.generate(
-                **input,
-                max_new_tokens=max_gen,
-                num_beams=1,
-                do_sample=False,
-                temperature=1.0,
-                min_length=context_length+1,
-            )[0]
-        elif "qwen" in model_name: # prevent illegal output on Phi4 (model starts with EOS, hence generating empty output)
-            output = model.generate(
-                        **input,
-                        max_new_tokens=max_gen,
-                        do_sample=False,
-                        temperature=1.0,
-                        num_beams=1
-                    )[0]
-        else:
+            inputs = tokenizer(
+                batch_prompts,
+                truncation=False,
+                return_tensors="pt",
+                padding=batch_size > 1,
+            ).to(device)
 
-            # with torch.profiler.profile(
-            #     activities=[
-            #         torch.profiler.ProfilerActivity.CPU, 
-            #         torch.profiler.ProfilerActivity.CUDA
-            #     ],
-            #     record_shapes=True,
-            #     with_stack=True,
-            #     with_flops=True,
-            #     profile_memory=True  # Tracks memory ops
-            # ) as prof:
-                
-            output = model.generate(
-                **input,
-                max_new_tokens=max_gen,
-                num_beams=1,
-                do_sample=False,
-                temperature=1.0,
-            )[0]
-        
-        # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        input_length = inputs.input_ids.shape[-1]
 
-        pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
-        pred = post_process(pred, model_name)
-        # except Exception as e:
-        #     print(e)
-        #     import traceback as tb
-        #     tb.print_stack()
-        #     exit
-        #     pred = "ERROR"
-        with open(out_path, "a", encoding="utf-8") as f:
-            json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
-            f.write('\n')
+        outputs = model.generate(**inputs, **generate_kwargs)
+
+        for i, (output, json_obj) in enumerate(zip(outputs, batch_data)):
+            pred = tokenizer.decode(output[input_length:], skip_special_tokens=True)
+            pred = post_process(pred, model_name)
+            with open(out_path, "a", encoding="utf-8") as f:
+                json.dump({
+                    "pred": pred,
+                    "answers": json_obj["answers"],
+                    "all_classes": json_obj["all_classes"],
+                    "length": json_obj["length"],
+                }, f, ensure_ascii=False)
+                f.write('\n')
+
         if "prof" in args.morph_type:
             break
-    # dist.destroy_process_group()
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -204,7 +205,7 @@ def load_model_and_tokenizer(path, model_name, device, args):
                 warning_flag = False
                 break
         assert warning_flag==False, f"Transformers version {transformers_version} is not compatible with MorphKV. MorphKV is tested with Transformers version {version_list}. Please install this by: pip install transformers==4.45.0"
-        cache_dir = "/home/ravighadia/MorphKV/model_chkpts/"
+        cache_dir = "../model_chkpts/"
         os.makedirs(cache_dir, exist_ok=True)
 
         # Load the model and tokenizer
@@ -219,7 +220,12 @@ def load_model_and_tokenizer(path, model_name, device, args):
             'window_size': int(args.window_size),
             'morph_type': args.morph_type,
             'evict_after': args.evict_after,
-            'max_capacity': args.max_capacity
+            'max_capacity': args.max_capacity,
+            'fuse_temperature': args.fuse_temperature,
+            'use_attn_offsets': args.use_attn_offsets,
+            'imp_budget': args.imp_budget,
+            'pre_rope': args.pre_rope,
+            'score_percentile': args.score_percentile
         }
         print(f"MorphKV is: {config.morphkv}")
         
@@ -228,7 +234,11 @@ def load_model_and_tokenizer(path, model_name, device, args):
             config=config,
             torch_dtype=torch.float16,
             cache_dir=cache_dir).to(device)
-        
+
+        tokenizer.padding_side = 'left'
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
     elif "longchat" in model_name or "vicuna" in model_name:
         assert False, "Models unsupported\n"
     model = model.eval()
@@ -254,9 +264,12 @@ if __name__ == '__main__':
         datasets = ["qasper","2wikimqa","hotpotqa","multi_news","passage_retrieval_en","lcc"] #["qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "gov_report", "multi_news", \
             #"trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
     else:
-        datasets = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique", \
-                    "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
-                    "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
+        if args.dataset_split is not None:
+            datasets = DATASET_SPLITS[args.dataset_split]
+        else:
+            datasets = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique", \
+                        "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
+                        "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))
@@ -273,25 +286,25 @@ if __name__ == '__main__':
             if not os.path.exists("pred_mem"):
                 os.makedirs("pred_mem")
             # data = load_dataset('THUDM/LongBench', f"{dataset}", split='test')
-            data = [json.loads(line) for line in open(f"/home/ravighadia/MorphKV/LongBench/data/{dataset}.jsonl", "r")]
+            data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]
             if not os.path.exists(f"pred_mem/{model_name}"):
                 os.makedirs(f"pred_mem/{model_name}")
-            out_path = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
-            logfile = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
+            out_path = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_prerope_{args.pre_rope}_len{args.len}.jsonl"
+            logfile = f"pred_mem/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_prerope_{args.pre_rope}_len{args.len}.log"
         elif args.e:
             # data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
-            data = [json.loads(line) for line in open(f"/home/ravighadia/MorphKV/LongBench/data/{dataset}.jsonl", "r")]
+            data = [json.loads(line) for line in open(f"data/{dataset}_e.jsonl", "r")]
             if not os.path.exists(f"pred_e/{model_name}"):
                 os.makedirs(f"pred_e/{model_name}")
-            out_path = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
-            logfile = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
+            out_path = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_prerope_{args.pre_rope}_len{args.len}.jsonl"
+            logfile = f"pred_e/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_prerope_{args.pre_rope}_len{args.len}.log"
         else:
             # For .jsonl files (JSON Lines format):
-            data = [json.loads(line) for line in open(f"/home/ravighadia/MorphKV/LongBench/data/{dataset}.jsonl", "r")]#load_dataset('THUDM/LongBench', dataset, split='test')
+            data = [json.loads(line) for line in open(f"data/{dataset}.jsonl", "r")]#load_dataset('THUDM/LongBench', dataset, split='test')
             if not os.path.exists(f"{pred_path}/{model_name}"):
                 os.makedirs(f"{pred_path}/{model_name}")
-            out_path = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.jsonl"
-            logfile = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_len{args.len}.log"
+            out_path = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_prerope_{args.pre_rope}_len{args.len}.jsonl"
+            logfile = f"{pred_path}/{model_name}/{dataset}_ws{args.window_size}_mc{args.max_capacity}_ft{args.fuse_temperature}_ao_{args.use_attn_offsets}_morphkv_{not(args.no_morph)}_type_{args.morph_type}_prerope_{args.pre_rope}_len{args.len}.log"
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
         data_all = [data_sample for data_sample in data]

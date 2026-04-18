@@ -18,6 +18,7 @@ setup(
         "transformers==4.45.0",
         "numpy",
         "plotly",
+        "datasets"
     ],
     extras_require={
         "flash": [
